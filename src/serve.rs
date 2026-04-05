@@ -7,7 +7,7 @@ use rmcp::{
     transport::stdio,
 };
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -32,46 +32,6 @@ struct MemsoServer {
     tool_router: ToolRouter<Self>,
 }
 
-// --- Flexible deserializers ---
-// Claude Code sends numeric and array tool parameters as JSON strings.
-// These helpers accept both the native type and its string representation.
-
-fn de_f32<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
-    let v: serde_json::Value = Deserialize::deserialize(d)?;
-    match &v {
-        serde_json::Value::Number(n) => n.as_f64().map(|f| f as f32).ok_or_else(|| serde::de::Error::custom("invalid number")),
-        serde_json::Value::String(s) => s.parse::<f32>().map_err(serde::de::Error::custom),
-        _ => Err(serde::de::Error::custom(format!("expected f32, got {v}"))),
-    }
-}
-
-fn de_usize<'de, D: Deserializer<'de>>(d: D) -> Result<usize, D::Error> {
-    let v: serde_json::Value = Deserialize::deserialize(d)?;
-    match &v {
-        serde_json::Value::Number(n) => n.as_u64().map(|n| n as usize).ok_or_else(|| serde::de::Error::custom("invalid number")),
-        serde_json::Value::String(s) => s.parse::<usize>().map_err(serde::de::Error::custom),
-        _ => Err(serde::de::Error::custom(format!("expected usize, got {v}"))),
-    }
-}
-
-fn de_string_vec_opt<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
-    let v: serde_json::Value = Deserialize::deserialize(d)?;
-    match v {
-        serde_json::Value::Array(arr) => arr
-            .into_iter()
-            .map(|item| match item {
-                serde_json::Value::String(s) => Ok(s),
-                other => Ok(other.to_string()),
-            })
-            .collect(),
-        serde_json::Value::String(s) => {
-            serde_json::from_str::<Vec<String>>(&s).map_err(serde::de::Error::custom)
-        }
-        serde_json::Value::Null => Ok(vec![]),
-        _ => Err(serde::de::Error::custom("expected array or JSON array string")),
-    }
-}
-
 // --- Tool input schemas ---
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -88,13 +48,13 @@ struct StoreMemoryInput {
     #[serde(default)]
     topic_key: Option<String>,
     /// Array of short discrete facts extracted from the content.
-    #[serde(default, deserialize_with = "de_string_vec_opt")]
+    #[serde(default)]
     facts: Vec<String>,
     /// Array of tag strings.
-    #[serde(default, deserialize_with = "de_string_vec_opt")]
+    #[serde(default)]
     tags: Vec<String>,
     /// Importance 0.0-1.0. Use 0.9+ for architecture decisions, 0.7+ for gotchas.
-    #[serde(default = "default_importance", deserialize_with = "de_f32")]
+    #[serde(default = "default_importance")]
     importance: f32,
     /// Project scope. Omit to use the server's configured project_id.
     #[serde(default)]
@@ -111,7 +71,7 @@ struct SearchMemoryInput {
     #[serde(default)]
     project_id: Option<String>,
     /// Maximum results to return (default 5).
-    #[serde(default = "default_search_limit", deserialize_with = "de_usize")]
+    #[serde(default = "default_search_limit")]
     limit: usize,
 }
 
@@ -132,10 +92,10 @@ struct ListMemoriesInput {
     #[serde(default, rename = "type")]
     memory_type: Option<String>,
     /// Filter by tags (optional).
-    #[serde(default, deserialize_with = "de_string_vec_opt")]
+    #[serde(default)]
     tags: Vec<String>,
     /// Maximum results to return (default 20).
-    #[serde(default = "default_list_limit", deserialize_with = "de_usize")]
+    #[serde(default = "default_list_limit")]
     limit: usize,
 }
 
