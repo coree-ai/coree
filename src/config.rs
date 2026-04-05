@@ -82,7 +82,7 @@ impl Config {
             .and_then(|p| p.parent())
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        base.join(".memso.db")
+        base.join(".memso").join("memory.db")
     }
 }
 

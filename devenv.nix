@@ -5,5 +5,7 @@
 
   packages = with pkgs; [
     cargo-outdated
+    sqld
+    turso-cli
   ];
 }

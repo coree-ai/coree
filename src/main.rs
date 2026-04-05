@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use memso::{config::Config, inject, install, serve, status};
+use memso::{capture, config::Config, inject, install, serve, status};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -29,6 +29,11 @@ enum Command {
         limit: usize,
         #[arg(long, default_value_t = 8000, help = "Max output characters")]
         budget: usize,
+    },
+    /// Capture a PostToolUse hook event for later review at session start
+    Capture {
+        #[arg(long, help = "Override project ID")]
+        project: Option<String>,
     },
     /// Migrate local database to Turso Cloud
     Migrate {
@@ -65,6 +70,11 @@ async fn main() -> Result<()> {
                 eprintln!("memso inject error: {e}");
             }
         }
+        Command::Capture { project } => {
+            if let Err(e) = capture::run(project).await {
+                eprintln!("memso capture error: {e}");
+            }
+        }
         Command::Migrate { to_turso, token } => {
             eprintln!("migrate not yet implemented");
             let _ = (to_turso, token);
@@ -87,7 +97,12 @@ async fn main() -> Result<()> {
             } else {
                 println!("UserPromptSubmit hook already configured - skipped");
             }
-            if !result.mcp_added && !result.session_hook_added && !result.prompt_hook_added {
+            if result.capture_hook_added {
+                println!("{prefix}Added PostToolUse hook");
+            } else {
+                println!("PostToolUse hook already configured - skipped");
+            }
+            if !result.mcp_added && !result.session_hook_added && !result.prompt_hook_added && !result.capture_hook_added {
                 println!("Nothing to do - memso is already fully configured.");
             } else if !dry_run {
                 println!("\nDone. Restart Claude Code for changes to take effect.");

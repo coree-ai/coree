@@ -79,4 +79,17 @@ CREATE TRIGGER IF NOT EXISTS memories_fts_delete
         INSERT INTO memories_fts(memories_fts, rowid, title, content, facts)
         VALUES ('delete', old.rowid, old.title, old.content, COALESCE(old.facts, ''));
     END;
+
+CREATE TABLE IF NOT EXISTS raw_captures (
+    id           TEXT PRIMARY KEY,
+    project_id   TEXT NOT NULL,
+    captured_at  TEXT NOT NULL,
+    tool_name    TEXT NOT NULL,
+    summary      TEXT NOT NULL,
+    raw_data     TEXT NOT NULL,
+    presented_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS raw_captures_pending
+    ON raw_captures (project_id, presented_at);
 ";
