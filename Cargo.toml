@@ -1,0 +1,57 @@
+[package]
+name = "memso"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Local-first persistent memory for AI agents, backed by libSQL and Turso"
+
+[dependencies]
+# MCP stdio transport
+rmcp = { version = "1", features = ["server", "transport-io"] }
+
+# Database - embedded SQLite replica with Turso sync
+libsql = "0.9"
+
+# Local ONNX embeddings (bge-small-en-v1.5)
+fastembed = { version = "5", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Serialisation
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Config file parsing
+toml = "1"
+
+# UUIDs for session_id and memory IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Content hash dedup
+sha2 = "0.11"
+
+# HTTP client for Turso Platform API (setup command)
+reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
+
+# JSON schema generation for MCP tool definitions
+schemars = "1"
+
+# Secret sanitization
+regex = "1"
+once_cell = "1"
+
+# Error handling
+anyhow = "1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Hex encoding for content hashes
+hex = "0.4"
+
+# XDG/platform config and cache directories
+dirs = "6"

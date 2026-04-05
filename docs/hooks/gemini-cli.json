@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "command": "memso inject --type session"
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "command": "memso inject --type prompt --budget 8000"
+      }
+    ]
+  }
+}
