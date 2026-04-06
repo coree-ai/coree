@@ -10,12 +10,11 @@ use crate::{config::Config, db::Db, migrations, project_id};
 const CAPTURE_TOOLS: &[&str] = &["Write", "Edit", "MultiEdit", "Bash"];
 
 const POST_CAPTURE_INSTRUCTION: &str =
-    "[memso] State-changing tool just ran. In this response, call capture_note(summary) to record \
-WHY - the capture above records what changed, not the reason. \
-capture_note is a staging log reviewed at next session; store_memory is durable and immediately searchable. \
-If this change involved a decision, discovery, or gotcha that needs to be findable now or later this session, \
-use store_memory (type='decision'/'gotcha'/'how-it-works') instead of or in addition to capture_note. \
-Skip only if this was purely mechanical with no reasoning worth preserving.";
+    "[memso] State-changing tool just ran. Call capture_note(summary) now to record WHY - \
+the capture records what changed, not the reason. \
+If this involved a decision, discovery, or gotcha: call store_memory instead \
+(type='decision'/'gotcha'/'how-it-works') - store_memory is durable and immediately searchable, \
+capture_note is a staging log reviewed next session. Call one or both; do not skip.";
 
 pub async fn run(project_override: Option<String>) -> Result<()> {
     let mut buf = String::new();

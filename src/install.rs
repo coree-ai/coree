@@ -3,11 +3,11 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 const MCP_SERVER_NAME: &str = "memso";
-const HOOK_SESSION_CMD: &str = "memso inject --type session";
-const HOOK_PROMPT_CMD: &str = "memso inject --type prompt --budget 8000";
+const HOOK_SESSION_CMD: &str = "memso inject --type session --budget 32000";
+const HOOK_PROMPT_CMD: &str = "memso inject --type prompt --budget 32000";
 const HOOK_CAPTURE_CMD: &str = "memso capture";
-const HOOK_STOP_CMD: &str = "memso inject --type stop";
-const HOOK_COMPACT_CMD: &str = "memso inject --type compact";
+const HOOK_STOP_CMD: &str = "memso inject --type stop --budget 32000";
+const HOOK_COMPACT_CMD: &str = "memso inject --type compact --budget 32000";
 
 pub struct InstallResult {
     pub mcp_added: bool,

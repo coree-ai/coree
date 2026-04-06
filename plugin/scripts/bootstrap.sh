@@ -35,9 +35,8 @@ case "${OS}" in
     ;;
   Darwin)
     case "${ARCH}" in
-      x86_64) ARTIFACT="memso-macos-x86_64.tar.gz" ;;
-      arm64)  ARTIFACT="memso-macos-aarch64.tar.gz" ;;
-      *) echo "[memso] Unsupported architecture: ${ARCH}" >&2; exit 0 ;;
+      arm64) ARTIFACT="memso-macos-aarch64.tar.gz" ;;
+      *) echo "[memso] Unsupported platform: macOS ${ARCH} (only Apple Silicon is supported)" >&2; exit 0 ;;
     esac
     ;;
   MINGW* | MSYS* | CYGWIN*)

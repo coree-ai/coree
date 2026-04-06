@@ -20,6 +20,8 @@ search_memory(query,[limit]) | get_memory(id) | get_memories(ids) | \
 list_memories([type,tags,limit]) | capture_note(summary,[context]) | delete_memory(id)\n";
 
 const SESSION_INSTRUCTIONS: &str = "[memso] Session start: call get_memories on the IDs in Memory Context below before proceeding. \
+Fetch aggressively - all memories with importance >= 0.7 should always be fetched; \
+fetch others if their title suggests relevance to the current task or open files. \
 When storing memories from Pending Review, set source='reviewed'. \
 Use capture_note(summary) to stage tentative observations for later review.\n";
 
@@ -75,14 +77,21 @@ async fn run_prompt(
     Ok(())
 }
 
-// Fires on every Claude response completion. Outputs instructions only - no DB query.
+const STOP_INSTRUCTIONS: &str =
+    "[memso] End of response. Before finishing: have you stored all decisions, discoveries, \
+and gotchas from this response? If a decision was made, a non-obvious fact was learned, \
+or something failed unexpectedly - store it now with store_memory. \
+Use capture_note for reasoning behind changes that do not yet warrant a full memory. \
+Do not wait until end of session - memories stored now are searchable immediately.";
+
+// Fires on every Claude response completion. Outputs a checkpoint prompt - no DB query.
 // Guards against infinite loops: if stop_hook_active is true, a Stop hook already
 // ran this turn (Claude responded to the hook output), so we skip to avoid compounding.
 fn run_stop(budget: usize) -> Result<()> {
     if is_stop_hook_active() {
         return Ok(());
     }
-    print_within_budget(INSTRUCTIONS, budget);
+    print_within_budget(STOP_INSTRUCTIONS, budget);
     Ok(())
 }
 
@@ -217,8 +226,8 @@ fn format_compact(results: &[retrieve::CompactResult]) -> String {
     for r in results {
         let date = r.created_at.get(..10).unwrap_or(&r.created_at);
         out.push_str(&format!(
-            "[{:<18}] {}  {}  {}\n",
-            r.memory_type, r.id, date, r.title
+            "[{:<18} {:.2}] {}  {}  {}\n",
+            r.memory_type, r.importance, r.id, date, r.title
         ));
     }
     out.push_str("---\n");

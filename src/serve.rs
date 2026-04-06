@@ -330,7 +330,7 @@ fn format_compact(results: &[retrieve::CompactResult]) -> String {
     let mut out = format!("--- Memory Context ({} results) ---\n", results.len());
     for r in results {
         let date = r.created_at.get(..10).unwrap_or(&r.created_at);
-        out.push_str(&format!("[{:<18}] {}  {}  {}\n", r.memory_type, r.id, date, r.title));
+        out.push_str(&format!("[{:<18} {:.2}] {}  {}  {}\n", r.memory_type, r.importance, r.id, date, r.title));
     }
     out.push_str("---\n");
     out

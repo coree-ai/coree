@@ -71,6 +71,7 @@ pub struct CompactResult {
     pub memory_type: String,
     pub title: String,
     pub created_at: String,
+    pub importance: f64,
     pub score: f64,
 }
 
@@ -202,7 +203,7 @@ pub async fn search(
             let boost = source_boost(query, &memory_type);
             let score = (rrf_v + rrf_b) * ret * boost;
 
-            scored.push(CompactResult { id, memory_type, title, created_at, score });
+            scored.push(CompactResult { id, memory_type, title, created_at, importance, score });
         }
     }
 
@@ -301,6 +302,7 @@ pub async fn search_bm25(
             title: row.get(2)?,
             created_at,
             score: retention_score(&memory_type, importance, days, access_count, &source),
+            importance,
             memory_type,
         });
     }
@@ -368,6 +370,7 @@ pub async fn list(
                 title: row.get(2)?,
                 created_at,
                 score: retention_score(&memory_type, importance, days, access_count, &source),
+                importance,
                 memory_type,
             },
             tags_json,
