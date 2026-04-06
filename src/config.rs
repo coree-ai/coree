@@ -11,7 +11,7 @@ pub enum BackendMode {
     Replica,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 pub struct BackendConfig {
     #[serde(default)]
     pub mode: BackendMode,
@@ -19,6 +19,17 @@ pub struct BackendConfig {
     pub remote_url: Option<String>,
     /// Supports "${ENV_VAR}" substitution
     pub auth_token: Option<String>,
+}
+
+impl std::fmt::Debug for BackendConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackendConfig")
+            .field("mode", &self.mode)
+            .field("local_path", &self.local_path)
+            .field("remote_url", &self.remote_url)
+            .field("auth_token", &self.auth_token.as_deref().map(|_| "[REDACTED]"))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -107,4 +118,44 @@ fn load_file(path: &Path) -> Result<Config> {
     let text = std::fs::read_to_string(path)?;
     let cfg: Config = toml::from_str(&text)?;
     Ok(cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_db_path_defaults_relative_to_config() {
+        let mut cfg = Config::default();
+        cfg.source_path = Some(PathBuf::from("/some/project/.memso.toml"));
+        assert_eq!(cfg.local_db_path(), PathBuf::from("/some/project/.memso/memory.db"));
+    }
+
+    #[test]
+    fn local_db_path_respects_override() {
+        let mut cfg = Config::default();
+        cfg.backend.local_path = Some("/custom/path.db".to_string());
+        assert_eq!(cfg.local_db_path(), PathBuf::from("/custom/path.db"));
+    }
+
+    #[test]
+    fn resolve_env_vars_substitutes_var() {
+        // SAFETY: single-threaded test, no other threads reading this var.
+        unsafe { std::env::set_var("_MEMSO_TEST_TOKEN", "supersecret") };
+        let mut cfg = Config::default();
+        cfg.backend.auth_token = Some("${_MEMSO_TEST_TOKEN}".to_string());
+        cfg.resolve_env_vars();
+        assert_eq!(cfg.backend.auth_token, Some("supersecret".to_string()));
+        unsafe { std::env::remove_var("_MEMSO_TEST_TOKEN") };
+    }
+
+    #[test]
+    fn resolve_env_vars_missing_var_becomes_none() {
+        // SAFETY: single-threaded test, no other threads reading this var.
+        unsafe { std::env::remove_var("_MEMSO_NONEXISTENT_VAR") };
+        let mut cfg = Config::default();
+        cfg.backend.auth_token = Some("${_MEMSO_NONEXISTENT_VAR}".to_string());
+        cfg.resolve_env_vars();
+        assert_eq!(cfg.backend.auth_token, None);
+    }
 }

@@ -3,7 +3,7 @@ use chrono::Utc;
 use libsql::params;
 use std::collections::HashMap;
 
-use crate::embed::Embedder;
+use crate::embed;
 
 const RRF_K: f64 = 60.0;
 
@@ -19,6 +19,7 @@ fn type_weight(memory_type: &str) -> f64 {
         "workflow"         => 0.68,
         "discovery"        => 0.65,
         "what-changed"     => 0.60,
+        "fact"             => 0.55,
         _                  => 0.50,
     }
 }
@@ -90,15 +91,18 @@ pub struct FullMemory {
     pub updated_at: String,
 }
 
+/// Hybrid RRF search combining vector similarity and BM25 full-text.
+///
+/// `embedding` must be pre-computed by the caller before any locks are held,
+/// so the embedding step does not block concurrent tool calls.
 pub async fn search(
     conn: &libsql::Connection,
-    embedder: &mut Embedder,
+    embedding: Vec<f32>,
     query: &str,
     project_id: &str,
     limit: usize,
 ) -> Result<Vec<CompactResult>> {
-    let embedding = embedder.embed(query)?;
-    let blob = floats_to_blob(&embedding);
+    let blob = embed::floats_to_blob(&embedding);
 
     // Stream A: vector search
     let mut vector_ranks: HashMap<String, usize> = HashMap::new();
@@ -159,8 +163,9 @@ pub async fn search(
         return Ok(vec![]);
     }
 
-    // Fetch metadata for scoring - query each ID individually to avoid
-    // dynamic IN clause parameter binding complexity
+    // Fetch metadata for scoring.
+    // Note: queries each ID individually to avoid dynamic IN-clause construction.
+    // Acceptable for typical candidate set sizes (limit * 2 ≤ ~40).
     let now = Utc::now();
     let mut scored: Vec<CompactResult> = Vec::new();
 
@@ -323,13 +328,13 @@ pub async fn list(
 ) -> Result<Vec<CompactResult>> {
     let now = Utc::now();
 
-    // Fetch a ceiling of candidates ordered by recency; scoring and importance
-    // filtering happen in-process. The ceiling is generous so important older
-    // memories are not dropped before scoring.
+    // Fetch a ceiling of candidates ordered by recency; scoring and filtering
+    // happen in-process. The ceiling is generous so important older memories
+    // are not dropped before scoring.
     let ceiling = (limit * 4).max(200) as i64;
     let mut rows = conn
         .query(
-            "SELECT id, type, title, created_at, importance, access_count, last_accessed, source
+            "SELECT id, type, title, created_at, importance, access_count, last_accessed, source, tags
              FROM memories
              WHERE project_id = ?1 AND status = 'active' AND importance >= ?2
              ORDER BY created_at DESC
@@ -338,7 +343,8 @@ pub async fn list(
         )
         .await?;
 
-    let mut results: Vec<CompactResult> = Vec::new();
+    // Collect with tags for post-query filtering.
+    let mut tagged: Vec<(CompactResult, Option<String>)> = Vec::new();
     while let Some(row) = rows.next().await? {
         let memory_type: String = row.get(1)?;
 
@@ -353,24 +359,40 @@ pub async fn list(
         let access_count: i64 = row.get(5)?;
         let last_accessed: Option<String> = row.get(6).ok();
         let source: String = row.get(7).unwrap_or_else(|_| "realtime".to_string());
+        let tags_json: Option<String> = row.get(8).ok();
         let days = days_since(last_accessed.as_deref().unwrap_or(&created_at), &now);
 
-        results.push(CompactResult {
-            id: row.get(0)?,
-            title: row.get(2)?,
-            created_at,
-            score: retention_score(&memory_type, importance, days, access_count, &source),
-            memory_type,
-        });
+        tagged.push((
+            CompactResult {
+                id: row.get(0)?,
+                title: row.get(2)?,
+                created_at,
+                score: retention_score(&memory_type, importance, days, access_count, &source),
+                memory_type,
+            },
+            tags_json,
+        ));
     }
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    results.truncate(limit);
+    tagged.sort_by(|a, b| b.0.score.partial_cmp(&a.0.score).unwrap_or(std::cmp::Ordering::Equal));
 
-    // tag filtering is post-query for simplicity (tags stored as JSON)
-    if !filter_tags.is_empty() {
-        results.retain(|_| true); // TODO: fetch tags and filter - deferred
-    }
+    // Apply tag filter after scoring; take limit after filtering so callers
+    // get up to `limit` results even when tags reduce the candidate set.
+    let results: Vec<CompactResult> = tagged
+        .into_iter()
+        .filter(|(_, tags_json)| {
+            if filter_tags.is_empty() {
+                return true;
+            }
+            let tags: Vec<String> = tags_json
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or_default();
+            filter_tags.iter().all(|t| tags.contains(t))
+        })
+        .take(limit)
+        .map(|(r, _)| r)
+        .collect();
 
     Ok(results)
 }
@@ -384,12 +406,56 @@ fn build_fts_query(query: &str) -> String {
         .join(" ")
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn type_weight_known_and_unknown() {
+        assert_eq!(type_weight("decision"), 0.90);
+        assert_eq!(type_weight("fact"), 0.55);
+        assert_eq!(type_weight("unknown_type"), 0.50);
+    }
+
+    #[test]
+    fn retention_score_higher_importance_scores_higher() {
+        let low = retention_score("decision", 0.3, 0.0, 0, "realtime");
+        let high = retention_score("decision", 0.9, 0.0, 0, "realtime");
+        assert!(high > low);
+    }
+
+    #[test]
+    fn retention_score_reviewed_boost() {
+        let normal = retention_score("decision", 0.7, 0.0, 0, "realtime");
+        let reviewed = retention_score("decision", 0.7, 0.0, 0, "reviewed");
+        assert!(reviewed > normal);
+    }
+
+    #[test]
+    fn source_boost_why_query_matches_decision() {
+        assert_eq!(source_boost("why did we choose this", "decision"), 1.3);
+        assert_eq!(source_boost("why did we choose this", "what-changed"), 1.0);
+    }
+
+    #[test]
+    fn source_boost_error_query_matches_gotcha() {
+        assert_eq!(source_boost("error in prod", "gotcha"), 1.3);
+        assert_eq!(source_boost("error in prod", "decision"), 1.0);
+    }
+
+    #[test]
+    fn build_fts_query_appends_wildcards() {
+        assert_eq!(build_fts_query("hello world"), "hello* world*");
+    }
+
+    #[test]
+    fn build_fts_query_empty_input() {
+        assert_eq!(build_fts_query(""), "");
+    }
+}
+
 fn days_since(datetime_str: &str, now: &chrono::DateTime<Utc>) -> f64 {
     chrono::DateTime::parse_from_rfc3339(datetime_str)
         .map(|dt| (*now - dt.with_timezone(&Utc)).num_seconds() as f64 / 86400.0)
         .unwrap_or(0.0)
-}
-
-fn floats_to_blob(v: &[f32]) -> Vec<u8> {
-    v.iter().flat_map(|f| f.to_le_bytes()).collect()
 }

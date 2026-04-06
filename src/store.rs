@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{embed::Embedder, sanitize};
+use crate::{embed, sanitize};
 
 pub struct StoreRequest {
     pub content: String,
@@ -37,9 +37,13 @@ pub fn new_write_lock() -> WriteLock {
     Arc::new(Mutex::new(()))
 }
 
+/// Store or upsert a memory.
+///
+/// `embedding` must be pre-computed by the caller before acquiring any locks,
+/// so the (potentially slow) embedding step does not block concurrent tool calls.
 pub async fn store_memory(
     conn: &libsql::Connection,
-    embedder: &mut Embedder,
+    embedding: Vec<f32>,
     lock: &WriteLock,
     req: StoreRequest,
     dedup_window_secs: i64,
@@ -52,8 +56,7 @@ pub async fn store_memory(
     let now_str = now.to_rfc3339();
 
     let importance = req.importance.unwrap_or(0.5) as f64;
-    let embedding = embedder.embed(&format!("{title} {content}"))?;
-    let embedding_blob = floats_to_blob(&embedding);
+    let embedding_blob = embed::floats_to_blob(&embedding);
 
     let tags_json = serde_json::to_string(&req.tags)?;
     let facts_json = if req.facts.is_empty() {
@@ -64,33 +67,22 @@ pub async fn store_memory(
 
     let _guard = lock.lock().await;
 
-    // Content hash dedup: skip if same content seen within window for this session
-    let recent: u32 = conn
+    // Content hash dedup: skip if same content seen within window for this session.
+    // Combines the count + id lookup into a single query.
+    if let Some(row) = conn
         .query(
-            "SELECT COUNT(*) FROM memories
+            "SELECT id FROM memories
              WHERE content_hash = ?1
                AND session_id   = ?2
-               AND (julianday(?3) - julianday(created_at)) * 86400 < ?4",
+               AND (julianday(?3) - julianday(created_at)) * 86400 < ?4
+             LIMIT 1",
             params![hash.clone(), req.session_id.clone(), now_str.clone(), dedup_window_secs],
         )
         .await?
         .next()
         .await?
-        .map(|r| r.get::<u32>(0).unwrap_or(0))
-        .unwrap_or(0);
-
-    if recent > 0 {
-        // Return the existing memory's ID
-        let existing_id: String = conn
-            .query(
-                "SELECT id FROM memories WHERE content_hash = ?1 AND session_id = ?2 LIMIT 1",
-                params![hash, req.session_id],
-            )
-            .await?
-            .next()
-            .await?
-            .map(|r| r.get::<String>(0).unwrap_or_default())
-            .unwrap_or_default();
+    {
+        let existing_id: String = row.get(0)?;
         return Ok(StoreResult { id: existing_id, upserted: false });
     }
 
@@ -109,12 +101,13 @@ pub async fn store_memory(
         if let Some(ref id) = existing {
             conn.execute(
                 "UPDATE memories
-                 SET content = ?1, title = ?2, facts = ?3, importance = ?4,
-                     content_hash = ?5, updated_at = ?6, source = COALESCE(?7, source)
-                 WHERE id = ?8",
+                 SET content = ?1, title = ?2, tags = ?3, facts = ?4, importance = ?5,
+                     content_hash = ?6, updated_at = ?7, source = COALESCE(?8, source)
+                 WHERE id = ?9",
                 params![
                     content,
                     title,
+                    tags_json,
                     facts_json,
                     importance,
                     hash,
@@ -138,37 +131,21 @@ pub async fn store_memory(
         }
     }
 
-    // Insert new memory. source is omitted when None so the DB default ('realtime') applies.
+    // Insert new memory. COALESCE lets the DB default ('realtime') apply when source is NULL.
     let id = Uuid::new_v4().to_string();
-    if let Some(ref source) = req.source {
-        conn.execute(
-            "INSERT INTO memories
-                (id, project_id, topic_key, type, title, content, facts, tags,
-                 importance, session_id, source, created_at, updated_at, content_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-            params![
-                id.clone(), req.project_id, req.topic_key, req.memory_type,
-                title, content, facts_json, tags_json,
-                importance, req.session_id, source.clone(),
-                now_str.clone(), now_str, hash
-            ],
-        )
-        .await?;
-    } else {
-        conn.execute(
-            "INSERT INTO memories
-                (id, project_id, topic_key, type, title, content, facts, tags,
-                 importance, session_id, created_at, updated_at, content_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                id.clone(), req.project_id, req.topic_key, req.memory_type,
-                title, content, facts_json, tags_json,
-                importance, req.session_id,
-                now_str.clone(), now_str, hash
-            ],
-        )
-        .await?;
-    }
+    conn.execute(
+        "INSERT INTO memories
+            (id, project_id, topic_key, type, title, content, facts, tags,
+             importance, session_id, source, created_at, updated_at, content_hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, COALESCE(?11, 'realtime'), ?12, ?13, ?14)",
+        params![
+            id.clone(), req.project_id, req.topic_key, req.memory_type,
+            title, content, facts_json, tags_json,
+            importance, req.session_id, req.source,
+            now_str.clone(), now_str, hash
+        ],
+    )
+    .await?;
 
     conn.execute(
         "INSERT INTO memory_vectors (memory_id, embedding) VALUES (?1, ?2)",
@@ -185,6 +162,17 @@ fn content_hash(content: &str) -> String {
     hex::encode(h.finalize())
 }
 
-fn floats_to_blob(v: &[f32]) -> Vec<u8> {
-    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_hash_is_deterministic_and_unique() {
+        let h1 = content_hash("hello");
+        let h2 = content_hash("hello");
+        let h3 = content_hash("world");
+        assert_eq!(h1, h2, "same input must produce same hash");
+        assert_ne!(h1, h3, "different inputs must produce different hashes");
+        assert_eq!(h1.len(), 64, "SHA-256 hex is 64 chars");
+    }
 }

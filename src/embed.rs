@@ -25,10 +25,33 @@ impl Embedder {
     }
 
     pub fn embed(&mut self, text: &str) -> Result<Vec<f32>> {
-        let mut results = self
+        let results = self
             .model
             .embed(vec![text], None)
             .context("Embedding failed")?;
-        Ok(results.remove(0))
+        results.into_iter().next().context("Embedding model returned no results")
+    }
+}
+
+/// Encode a float slice as a little-endian byte blob for libsql vector storage.
+/// Shared by store and retrieve to avoid duplication.
+pub fn floats_to_blob(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn floats_to_blob_roundtrip() {
+        let floats = vec![1.0f32, 2.0f32, -3.5f32];
+        let blob = floats_to_blob(&floats);
+        assert_eq!(blob.len(), 12); // 3 floats * 4 bytes each
+        let decoded: Vec<f32> = blob
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+        assert_eq!(decoded, floats);
     }
 }

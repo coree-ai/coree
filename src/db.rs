@@ -33,7 +33,8 @@ impl Db {
                     .auth_token
                     .as_deref()
                     .context("replica mode requires backend.auth_token")?;
-                Builder::new_remote_replica(path.to_str().unwrap(), url.to_string(), token.to_string())
+                let path_str = path.to_str().context("replica DB path is not valid UTF-8")?;
+                Builder::new_remote_replica(path_str, url.to_string(), token.to_string())
                     .sync_interval(std::time::Duration::from_secs(1))
                     .build()
                     .await

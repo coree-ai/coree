@@ -123,7 +123,7 @@ struct ListMemoriesInput {
     /// Filter by type (optional).
     #[serde(default, rename = "type")]
     memory_type: Option<String>,
-    /// Filter by tags (optional).
+    /// Filter by tags (optional). Only memories containing ALL specified tags are returned.
     // Claude Code MCP client sends arrays as JSON-encoded strings - see comment above.
     #[serde_as(as = "PickFirst<(_, JsonString)>")]
     #[schemars(with = "Vec<String>")]
@@ -161,6 +161,14 @@ impl MemsoServer {
     #[tool(description = "Store or upsert a memory. Use topic_key for upsert semantics.")]
     async fn store_memory(&self, Parameters(input): Parameters<StoreMemoryInput>) -> Result<String, String> {
         let project = input.project_id.unwrap_or_else(|| self.project_id.clone());
+        let embed_text = format!("{} {}", input.title, input.content);
+
+        // Compute embedding with the embedder lock held, then release before DB work.
+        let embedding = {
+            let mut e = self.embedder.lock().await;
+            e.embed(&embed_text).map_err(|e| format!("embed failed: {e}"))?
+        };
+
         let req = store::StoreRequest {
             content: input.content,
             memory_type: input.memory_type,
@@ -173,8 +181,7 @@ impl MemsoServer {
             facts: input.facts,
             source: input.source,
         };
-        let mut embedder = self.embedder.lock().await;
-        store::store_memory(&self.conn, &mut embedder, &self.write_lock, req, 30)
+        store::store_memory(&self.conn, embedding, &self.write_lock, req, 30)
             .await
             .map(|r| if r.upserted { format!("Updated memory {}", r.id) } else { format!("Stored memory {}", r.id) })
             .map_err(|e| format!("store_memory failed: {e}"))
@@ -184,8 +191,14 @@ impl MemsoServer {
     async fn search_memory(&self, Parameters(input): Parameters<SearchMemoryInput>) -> Result<String, String> {
         let project = input.project_id.unwrap_or_else(|| self.project_id.clone());
         let limit = input.limit.unwrap_or(5);
-        let mut embedder = self.embedder.lock().await;
-        retrieve::search(&self.conn, &mut embedder, &input.query, &project, limit)
+
+        // Compute embedding with the embedder lock held, then release before DB work.
+        let embedding = {
+            let mut e = self.embedder.lock().await;
+            e.embed(&input.query).map_err(|e| format!("embed failed: {e}"))?
+        };
+
+        retrieve::search(&self.conn, embedding, &input.query, &project, limit)
             .await
             .map(|results| if results.is_empty() { "No memories found.".to_string() } else { format_compact(&results) })
             .map_err(|e| format!("search_memory failed: {e}"))
@@ -204,7 +217,13 @@ impl MemsoServer {
 
     #[tool(description = "Fetch the full content of multiple memories by ID in a single call. Use when session-start context lists several IDs you need in full.")]
     async fn get_memories(&self, Parameters(input): Parameters<GetMemoriesInput>) -> Result<String, String> {
+        if input.ids.is_empty() {
+            return Ok("No IDs provided.".to_string());
+        }
         let mut parts: Vec<String> = Vec::new();
+        // Sequential fetches are acceptable here: this is called at most once per session
+        // with a small fixed ID set, and libsql connections are not concurrency-safe to
+        // share across spawned tasks without Arc cloning + careful lifetime management.
         for id in &input.ids {
             match retrieve::get_full(&self.conn, id).await {
                 Ok(Some(m)) => parts.push(format_full_memory(&m)),
@@ -212,11 +231,7 @@ impl MemsoServer {
                 Err(e) => parts.push(format!("Error fetching {id}: {e}")),
             }
         }
-        if parts.is_empty() {
-            Ok("No IDs provided.".to_string())
-        } else {
-            Ok(parts.join("\n---\n"))
-        }
+        Ok(parts.join("\n---\n"))
     }
 
     #[tool(description = "List memories with optional filters. Returns compact summaries.")]
@@ -314,7 +329,7 @@ fn format_compact(results: &[retrieve::CompactResult]) -> String {
         let date = r.created_at.get(..10).unwrap_or(&r.created_at);
         out.push_str(&format!("[{:<18}] {}  {}  {}\n", r.memory_type, r.id, date, r.title));
     }
-    out.push_str("---");
+    out.push_str("---\n");
     out
 }
 

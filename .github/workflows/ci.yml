@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Run tests and clippy on Linux. This is the fast feedback job.
+  test:
+    name: Test (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+  # Build-only checks for the other platforms agents run on.
+  # Tests require the fastembed ONNX runtime which is downloaded at build time;
+  # a full test run on every platform would be slow and hit network rate limits.
+  # A successful build confirms linkage, dependencies, and platform compatibility.
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest        # Apple Silicon (arm64)
+            target: aarch64-apple-darwin
+          - os: macos-13            # Intel Mac (x86_64)
+            target: x86_64-apple-darwin
+          - os: ubuntu-24.04-arm   # Linux ARM64 (Graviton, Raspberry Pi, etc.)
+            target: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-latest      # Copilot+ PCs / Snapdragon X - cross-compile from x86_64
+            target: aarch64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --target ${{ matrix.target }}

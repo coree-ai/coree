@@ -10,17 +10,10 @@ use std::path::Path;
 ///
 /// Always returns a non-empty string. Logs the resolved value to stderr.
 pub fn resolve(cwd: &Path, config_value: Option<&str>) -> String {
-    let id = if let Ok(v) = env::var("MEMSO_PROJECT") {
-        if !v.is_empty() {
-            return log_and_return(v, "MEMSO_PROJECT env var");
-        }
-        v
-    } else {
-        String::new()
-    };
-
-    if !id.is_empty() {
-        return log_and_return(id, "MEMSO_PROJECT env var");
+    if let Ok(v) = env::var("MEMSO_PROJECT")
+        && !v.is_empty()
+    {
+        return log_and_return(v, "MEMSO_PROJECT env var");
     }
 
     if let Some(v) = config_value

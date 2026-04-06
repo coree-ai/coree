@@ -62,7 +62,11 @@ pub async fn run(project_override: Option<String>) -> Result<()> {
 /// truncated to `max_len` chars.
 fn first_line(s: &str, max_len: usize) -> &str {
     let line = s.lines().map(|l| l.trim()).find(|l| !l.is_empty()).unwrap_or("");
-    if line.len() > max_len { &line[..max_len] } else { line }
+    // Use char boundary to avoid splitting multi-byte UTF-8 characters.
+    line.char_indices()
+        .nth(max_len)
+        .map(|(i, _)| &line[..i])
+        .unwrap_or(line)
 }
 
 fn extract_summary(tool_name: &str, data: &serde_json::Value) -> String {
@@ -109,5 +113,61 @@ fn extract_summary(tool_name: &str, data: &serde_json::Value) -> String {
             }
         }
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extract_summary_write_includes_path_and_first_line() {
+        let data = json!({
+            "tool_input": {"file_path": "src/main.rs", "content": "fn main() {}\nmore stuff"}
+        });
+        let s = extract_summary("Write", &data);
+        assert!(s.contains("src/main.rs"), "should include path: {s}");
+        assert!(s.contains("fn main()"), "should include first line: {s}");
+    }
+
+    #[test]
+    fn extract_summary_bash_success() {
+        let data = json!({
+            "tool_input": {"command": "cargo build"},
+            "tool_response": {"is_error": false, "output": "Finished dev profile"}
+        });
+        let s = extract_summary("Bash", &data);
+        assert!(s.contains("cargo build"), "should include command: {s}");
+        assert!(!s.starts_with("[FAILED]"), "should not be marked failed: {s}");
+    }
+
+    #[test]
+    fn extract_summary_bash_failure_has_prefix() {
+        let data = json!({
+            "tool_input": {"command": "cargo build"},
+            "tool_response": {"is_error": true, "output": "error: could not compile"}
+        });
+        let s = extract_summary("Bash", &data);
+        assert!(s.starts_with("[FAILED]"), "should be marked failed: {s}");
+    }
+
+    #[test]
+    fn first_line_truncates_ascii() {
+        assert_eq!(first_line("hello world", 5), "hello");
+    }
+
+    #[test]
+    fn first_line_handles_multibyte_utf8() {
+        // Each CJK character is 3 bytes; truncating at 2 chars must not split a char
+        let s = "AB\u{4e2d}\u{6587}suffix";
+        let result = first_line(s, 3); // "AB\u{4e2d}" = 3 chars
+        assert_eq!(result, "AB\u{4e2d}");
+    }
+
+    #[test]
+    fn first_line_skips_blank_lines() {
+        let result = first_line("\n\n  \nhello", 80);
+        assert_eq!(result, "hello");
     }
 }

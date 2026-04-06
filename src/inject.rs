@@ -35,7 +35,7 @@ pub async fn run(
         .unwrap_or_else(|| project_id::resolve(&cwd, config.memory.project_id.as_deref()));
 
     match inject_type {
-        "session" => run_session(&conn, &pid, limit, budget).await,
+        "session" => run_session(&conn, &pid, budget).await,
         _ => {
             let query = resolve_prompt_query(query_override);
             run_prompt(&conn, &query, &pid, limit, budget).await
@@ -67,7 +67,6 @@ async fn run_prompt(
 async fn run_session(
     conn: &libsql::Connection,
     project_id: &str,
-    _limit: usize,
     budget: usize,
 ) -> Result<()> {
     let mut output = INSTRUCTIONS.to_string();

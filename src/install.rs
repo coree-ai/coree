@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const MCP_SERVER_NAME: &str = "memso";
 const HOOK_SESSION_CMD: &str = "memso inject --type session";
@@ -19,10 +19,10 @@ pub fn run(dry_run: bool) -> Result<InstallResult> {
     let path = settings_path()?;
     let mut root = read_or_empty(&path)?;
 
-    let mcp_added = ensure_mcp_server(&mut root);
-    let session_hook_added = ensure_hook(&mut root, "SessionStart", HOOK_SESSION_CMD);
-    let prompt_hook_added = ensure_hook(&mut root, "UserPromptSubmit", HOOK_PROMPT_CMD);
-    let capture_hook_added = ensure_hook(&mut root, "PostToolUse", HOOK_CAPTURE_CMD);
+    let mcp_added = ensure_mcp_server(&mut root)?;
+    let session_hook_added = ensure_hook(&mut root, "SessionStart", HOOK_SESSION_CMD)?;
+    let prompt_hook_added = ensure_hook(&mut root, "UserPromptSubmit", HOOK_PROMPT_CMD)?;
+    let capture_hook_added = ensure_hook(&mut root, "PostToolUse", HOOK_CAPTURE_CMD)?;
 
     let changed = mcp_added || session_hook_added || prompt_hook_added || capture_hook_added;
 
@@ -39,19 +39,27 @@ pub fn run(dry_run: bool) -> Result<InstallResult> {
     })
 }
 
-/// Ensure `mcpServers.memso` exists with the correct command.
+/// Ensure `mcpServers.memso` exists with the correct command and args.
 /// Returns true if a change was made.
-fn ensure_mcp_server(root: &mut Value) -> bool {
-    let servers = root
+fn ensure_mcp_server(root: &mut Value) -> Result<bool> {
+    let obj = root
         .as_object_mut()
-        .unwrap()
-        .entry("mcpServers")
-        .or_insert_with(|| json!({}));
+        .context("settings.json root is not a JSON object")?;
+
+    let servers = obj.entry("mcpServers").or_insert_with(|| json!({}));
+    if !servers.is_object() {
+        anyhow::bail!("settings.json 'mcpServers' is not an object");
+    }
 
     if let Some(existing) = servers.get(MCP_SERVER_NAME) {
-        // Already present - check it points to the right command
-        if existing.get("command").and_then(|v| v.as_str()) == Some("memso") {
-            return false;
+        let cmd_ok = existing.get("command").and_then(|v| v.as_str()) == Some("memso");
+        let args_ok = existing
+            .get("args")
+            .and_then(|v| v.as_array())
+            .map(|a| a == &[json!("serve")])
+            .unwrap_or(false);
+        if cmd_ok && args_ok {
+            return Ok(false);
         }
     }
 
@@ -60,25 +68,25 @@ fn ensure_mcp_server(root: &mut Value) -> bool {
         "command": "memso",
         "args": ["serve"]
     });
-    true
+    Ok(true)
 }
 
 /// Ensure a hook entry with the given command exists under the given event.
 /// Returns true if a change was made.
-fn ensure_hook(root: &mut Value, event: &str, command: &str) -> bool {
-    let hooks_map = root
+fn ensure_hook(root: &mut Value, event: &str, command: &str) -> Result<bool> {
+    let obj = root
         .as_object_mut()
-        .unwrap()
-        .entry("hooks")
-        .or_insert_with(|| json!({}));
+        .context("settings.json root is not a JSON object")?;
 
-    let event_list = hooks_map
+    let hooks_map = obj.entry("hooks").or_insert_with(|| json!({}));
+    let hooks_obj = hooks_map
         .as_object_mut()
-        .unwrap()
-        .entry(event)
-        .or_insert_with(|| json!([]));
+        .context("settings.json 'hooks' is not an object")?;
 
-    let list = event_list.as_array_mut().unwrap();
+    let event_list = hooks_obj.entry(event).or_insert_with(|| json!([]));
+    let list = event_list
+        .as_array_mut()
+        .with_context(|| format!("settings.json hooks.{event} is not an array"))?;
 
     // Check if any existing entry already contains this command
     let already_present = list.iter().any(|entry| {
@@ -89,14 +97,11 @@ fn ensure_hook(root: &mut Value, event: &str, command: &str) -> bool {
             return true;
         }
         // Simple format: {"command": "..."}
-        if entry.get("command").and_then(|c| c.as_str()) == Some(command) {
-            return true;
-        }
-        false
+        entry.get("command").and_then(|c| c.as_str()) == Some(command)
     });
 
     if already_present {
-        return false;
+        return Ok(false);
     }
 
     list.push(json!({
@@ -108,7 +113,7 @@ fn ensure_hook(root: &mut Value, event: &str, command: &str) -> bool {
             }
         ]
     }));
-    true
+    Ok(true)
 }
 
 fn settings_path() -> Result<PathBuf> {
@@ -116,7 +121,7 @@ fn settings_path() -> Result<PathBuf> {
     Ok(home.join(".claude").join("settings.json"))
 }
 
-fn read_or_empty(path: &PathBuf) -> Result<Value> {
+fn read_or_empty(path: &Path) -> Result<Value> {
     if !path.exists() {
         return Ok(json!({}));
     }
@@ -129,11 +134,75 @@ fn read_or_empty(path: &PathBuf) -> Result<Value> {
         .with_context(|| format!("Failed to parse JSON in {}", path.display()))
 }
 
-fn write_settings(path: &PathBuf, value: &Value) -> Result<()> {
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_mcp_server_adds_when_absent() {
+        let mut root = json!({});
+        let changed = ensure_mcp_server(&mut root).unwrap();
+        assert!(changed);
+        assert_eq!(root["mcpServers"]["memso"]["command"], "memso");
+        assert_eq!(root["mcpServers"]["memso"]["args"], json!(["serve"]));
+    }
+
+    #[test]
+    fn ensure_mcp_server_skips_when_correct() {
+        let mut root = json!({
+            "mcpServers": {"memso": {"type": "stdio", "command": "memso", "args": ["serve"]}}
+        });
+        let changed = ensure_mcp_server(&mut root).unwrap();
+        assert!(!changed);
+    }
+
+    #[test]
+    fn ensure_mcp_server_fixes_wrong_args() {
+        let mut root = json!({
+            "mcpServers": {"memso": {"type": "stdio", "command": "memso", "args": ["wrong"]}}
+        });
+        let changed = ensure_mcp_server(&mut root).unwrap();
+        assert!(changed, "should overwrite when args are wrong");
+        assert_eq!(root["mcpServers"]["memso"]["args"], json!(["serve"]));
+    }
+
+    #[test]
+    fn ensure_hook_adds_when_absent() {
+        let mut root = json!({});
+        let changed = ensure_hook(&mut root, "SessionStart", "memso inject --type session").unwrap();
+        assert!(changed);
+        let hooks = root["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(hooks.len(), 1);
+    }
+
+    #[test]
+    fn ensure_hook_skips_when_present() {
+        let cmd = "memso inject --type session";
+        let mut root = json!({
+            "hooks": {"SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": cmd}]}]}
+        });
+        let changed = ensure_hook(&mut root, "SessionStart", cmd).unwrap();
+        assert!(!changed);
+    }
+
+    #[test]
+    fn ensure_hook_errors_on_non_object_hooks() {
+        let mut root = json!({"hooks": "not-an-object"});
+        let result = ensure_hook(&mut root, "SessionStart", "cmd");
+        assert!(result.is_err());
+    }
+}
+
+fn write_settings(path: &Path, value: &Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let text = serde_json::to_string_pretty(value)?;
-    std::fs::write(path, text + "\n")
-        .with_context(|| format!("Failed to write {}", path.display()))
+    let text = serde_json::to_string_pretty(value)? + "\n";
+    // Write to a temp file then rename for atomicity - avoids a corrupt
+    // settings.json on crash or disk-full mid-write.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &text)
+        .with_context(|| format!("Failed to write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("Failed to rename {} to {}", tmp.display(), path.display()))
 }

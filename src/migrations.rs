@@ -2,17 +2,51 @@ use anyhow::Result;
 use libsql::Connection;
 
 pub async fn run(conn: &Connection) -> Result<()> {
+    // Base schema: all CREATE TABLE/INDEX/TRIGGER statements are idempotent.
     conn.execute_batch(SCHEMA).await?;
-    // Fix rows written with the old default 'agent' before the 'realtime' rename.
+
+    let version = get_version(conn).await?;
+
+    // v0 -> v1: rename legacy 'agent' source value to 'realtime'.
+    if version < 1 {
+        conn.execute(
+            "UPDATE memories SET source = 'realtime' WHERE source = 'agent'",
+            libsql::params![],
+        )
+        .await?;
+        set_version(conn, 1).await?;
+    }
+
+    // Add future migrations here:
+    // if version < 2 { ... set_version(conn, 2).await?; }
+
+    Ok(())
+}
+
+async fn get_version(conn: &Connection) -> Result<i64> {
+    let row = conn
+        .query("SELECT version FROM schema_version LIMIT 1", libsql::params![])
+        .await?
+        .next()
+        .await?;
+    Ok(row.map(|r| r.get::<i64>(0).unwrap_or(0)).unwrap_or(0))
+}
+
+async fn set_version(conn: &Connection, version: i64) -> Result<()> {
+    conn.execute("DELETE FROM schema_version", libsql::params![]).await?;
     conn.execute(
-        "UPDATE memories SET source = 'realtime' WHERE source = 'agent'",
-        libsql::params![],
+        "INSERT INTO schema_version (version) VALUES (?1)",
+        libsql::params![version],
     )
     .await?;
     Ok(())
 }
 
 const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS memories (
     id            TEXT PRIMARY KEY,
     project_id    TEXT NOT NULL,
@@ -99,3 +133,8 @@ CREATE TABLE IF NOT EXISTS raw_captures (
 CREATE INDEX IF NOT EXISTS raw_captures_pending
     ON raw_captures (project_id, presented_at);
 ";
+
+// Note: the `sessions` table, and the `confidence` and `supersedes` columns on
+// `memories`, are defined in the schema but not yet used by any code path.
+// They are reserved for post-v1 features (session tracking, supersedes chaining).
+// Do not remove them from the schema without a versioned migration.
