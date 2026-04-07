@@ -75,6 +75,10 @@ pub struct CompactResult {
     pub score: f64,
     /// Character length of the full content, for budget-aware fetching decisions.
     pub content_len: usize,
+    /// Raw JSON array of fact strings from the DB; None if the column is NULL.
+    pub facts_json: Option<String>,
+    /// Raw JSON array of tag strings from the DB; None if the column is NULL.
+    pub tags_json: Option<String>,
 }
 
 #[derive(Debug)]
@@ -176,7 +180,7 @@ pub async fn search(
         let mut rows = conn
             .query(
                 "SELECT id, type, title, created_at, importance, access_count, last_accessed, source,
-                        length(content)
+                        length(content), facts, tags
                  FROM memories WHERE id = ?1",
                 params![id.clone()],
             )
@@ -192,6 +196,8 @@ pub async fn search(
             let last_accessed: Option<String> = row.get(6).ok();
             let source: String = row.get(7).unwrap_or_else(|_| "realtime".to_string());
             let content_len: i64 = row.get(8).unwrap_or(0);
+            let facts_json: Option<String> = row.get(9).ok();
+            let tags_json: Option<String> = row.get(10).ok();
 
             let days = days_since(last_accessed.as_deref().unwrap_or(&created_at), &now);
             let ret = retention_score(&memory_type, importance, days, access_count, &source);
@@ -207,7 +213,7 @@ pub async fn search(
             let boost = source_boost(query, &memory_type);
             let score = (rrf_v + rrf_b) * ret * boost;
 
-            scored.push(CompactResult { id, memory_type, title, created_at, importance, score, content_len: content_len as usize });
+            scored.push(CompactResult { id, memory_type, title, created_at, importance, score, content_len: content_len as usize, facts_json, tags_json });
         }
     }
 
@@ -316,7 +322,7 @@ pub async fn search_bm25(
     let mut rows = conn
         .query(
             "SELECT m.id, m.type, m.title, m.created_at, m.importance,
-                    m.access_count, m.last_accessed, m.source, length(m.content)
+                    m.access_count, m.last_accessed, m.source, length(m.content), m.facts, m.tags
              FROM memories m
              JOIN memories_fts ON memories_fts.rowid = m.rowid
              WHERE memories_fts MATCH ?1
@@ -337,6 +343,8 @@ pub async fn search_bm25(
         let last_accessed: Option<String> = row.get(6).ok();
         let source: String = row.get(7).unwrap_or_else(|_| "realtime".to_string());
         let content_len: i64 = row.get(8).unwrap_or(0);
+        let facts_json: Option<String> = row.get(9).ok();
+        let tags_json: Option<String> = row.get(10).ok();
         let days = days_since(last_accessed.as_deref().unwrap_or(&created_at), &now);
         results.push(CompactResult {
             id: row.get(0)?,
@@ -346,6 +354,8 @@ pub async fn search_bm25(
             importance,
             memory_type,
             content_len: content_len as usize,
+            facts_json,
+            tags_json,
         });
     }
 
@@ -379,7 +389,7 @@ pub async fn list(
     let mut rows = conn
         .query(
             "SELECT id, type, title, created_at, importance, access_count, last_accessed, source, tags,
-                    length(content)
+                    length(content), facts
              FROM memories
              WHERE project_id = ?1 AND status = 'active' AND importance >= ?2
              ORDER BY created_at DESC
@@ -388,8 +398,8 @@ pub async fn list(
         )
         .await?;
 
-    // Collect with tags for post-query filtering.
-    let mut tagged: Vec<(CompactResult, Option<String>)> = Vec::new();
+    // Collect candidates for post-query filtering.
+    let mut candidates: Vec<CompactResult> = Vec::new();
     while let Some(row) = rows.next().await? {
         let memory_type: String = row.get(1)?;
 
@@ -406,40 +416,39 @@ pub async fn list(
         let source: String = row.get(7).unwrap_or_else(|_| "realtime".to_string());
         let tags_json: Option<String> = row.get(8).ok();
         let content_len: i64 = row.get(9).unwrap_or(0);
+        let facts_json: Option<String> = row.get(10).ok();
         let days = days_since(last_accessed.as_deref().unwrap_or(&created_at), &now);
 
-        tagged.push((
-            CompactResult {
-                id: row.get(0)?,
-                title: row.get(2)?,
-                created_at,
-                score: retention_score(&memory_type, importance, days, access_count, &source),
-                importance,
-                memory_type,
-                content_len: content_len as usize,
-            },
+        candidates.push(CompactResult {
+            id: row.get(0)?,
+            title: row.get(2)?,
+            created_at,
+            score: retention_score(&memory_type, importance, days, access_count, &source),
+            importance,
+            memory_type,
+            content_len: content_len as usize,
+            facts_json,
             tags_json,
-        ));
+        });
     }
 
-    tagged.sort_by(|a, b| b.0.score.partial_cmp(&a.0.score).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
     // Apply tag filter after scoring; take limit after filtering so callers
     // get up to `limit` results even when tags reduce the candidate set.
-    let results: Vec<CompactResult> = tagged
+    let results: Vec<CompactResult> = candidates
         .into_iter()
-        .filter(|(_, tags_json)| {
+        .filter(|r| {
             if filter_tags.is_empty() {
                 return true;
             }
-            let tags: Vec<String> = tags_json
+            let tags: Vec<String> = r.tags_json
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or_default();
             filter_tags.iter().all(|t| tags.contains(t))
         })
         .take(limit)
-        .map(|(r, _)| r)
         .collect();
 
     Ok(results)

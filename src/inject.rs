@@ -18,8 +18,8 @@ capture_note(summary) = your reasoning before/after a change, reviewed next sess
 store_memory = a fact you would want to search for today or in a future session. \
 They are not interchangeable.\n\
 [memso tools] store_memories(memories:[{content,type,title,[topic_key,importance,tags,facts,source,pinned]}]) | \
-search_memory(query,[limit]) | get_memories(ids) | \
-list_memories([type,tags,limit]) | capture_note(summary,[context]) | \
+search_memory(query,[limit,detail]) | get_memories(ids) | \
+list_memories([type,tags,limit,detail]) | capture_note(summary,[context]) | \
 pin_memories(ids,pin) | delete_memories(ids)\n";
 
 const SESSION_INSTRUCTIONS: &str = "[memso] Session start — BEFORE responding to any user message, \

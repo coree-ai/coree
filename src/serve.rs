@@ -110,6 +110,9 @@ struct SearchMemoryInput {
     #[schemars(with = "Option<usize>")]
     #[serde(default)]
     limit: Option<usize>,
+    /// Detail level: omit or "compact" for title-only (default); "summary" to include facts and tags.
+    #[serde(default)]
+    detail: Option<String>,
 }
 
 #[serde_as]
@@ -163,6 +166,9 @@ struct ListMemoriesInput {
     #[schemars(with = "Option<usize>")]
     #[serde(default)]
     limit: Option<usize>,
+    /// Detail level: omit or "compact" for title-only (default); "summary" to include facts and tags.
+    #[serde(default)]
+    detail: Option<String>,
 }
 
 #[serde_as]
@@ -285,10 +291,11 @@ impl MemsoServer {
         Ok(results.join("\n"))
     }
 
-    #[tool(description = "Search memories using semantic + keyword search. Returns compact summaries with IDs. Use get_memory or get_memories to fetch full content.")]
+    #[tool(description = "Search memories using semantic + keyword search. Returns compact summaries with IDs. Pass detail=\"summary\" to also include facts and tags. Use get_memories(ids) to fetch full content.")]
     async fn search_memory(&self, Parameters(input): Parameters<SearchMemoryInput>) -> Result<String, String> {
         let project = input.project_id.unwrap_or_else(|| self.project_id.clone());
         let limit = input.limit.unwrap_or(5);
+        let summary = input.detail.as_deref() == Some("summary");
 
         // Compute embedding with the embedder lock held, then release before DB work.
         let embedding = {
@@ -298,7 +305,15 @@ impl MemsoServer {
 
         retrieve::search(&self.conn, embedding, &input.query, &project, limit)
             .await
-            .map(|results| if results.is_empty() { "No memories found.".to_string() } else { format_compact(&results) })
+            .map(|results| {
+                if results.is_empty() {
+                    "No memories found.".to_string()
+                } else if summary {
+                    format_summary(&results)
+                } else {
+                    format_compact(&results)
+                }
+            })
             .map_err(|e| format!("search_memory failed: {e}"))
     }
 
@@ -325,13 +340,22 @@ impl MemsoServer {
         Ok(parts.join("\n---\n"))
     }
 
-    #[tool(description = "List memories with optional filters. Returns compact summaries.")]
+    #[tool(description = "List memories with optional filters. Returns compact summaries. Pass detail=\"summary\" to also include facts and tags.")]
     async fn list_memories(&self, Parameters(input): Parameters<ListMemoriesInput>) -> Result<String, String> {
         let project = input.project_id.unwrap_or_else(|| self.project_id.clone());
         let limit = input.limit.unwrap_or(20);
+        let summary = input.detail.as_deref() == Some("summary");
         retrieve::list(&self.conn, &project, input.memory_type.as_deref(), &input.tags, limit, 0.0)
             .await
-            .map(|results| if results.is_empty() { "No memories found.".to_string() } else { format_compact(&results) })
+            .map(|results| {
+                if results.is_empty() {
+                    "No memories found.".to_string()
+                } else if summary {
+                    format_summary(&results)
+                } else {
+                    format_compact(&results)
+                }
+            })
             .map_err(|e| format!("list_memories failed: {e}"))
     }
 
@@ -406,8 +430,8 @@ impl ServerHandler for MemsoServer {
                  They are not interchangeable. \
                  Set source='reviewed' when storing memories during session-start review. \
                  Tools: store_memories(memories:[{content,type,title,[topic_key,importance,tags,facts,source,pinned]}]) | \
-                 search_memory(query,[limit]) | get_memories(ids) | \
-                 list_memories([type,tags,limit]) | capture_note(summary,[context]) | \
+                 search_memory(query,[limit,detail]) | get_memories(ids) | \
+                 list_memories([type,tags,limit,detail]) | capture_note(summary,[context]) | \
                  pin_memories(ids,pin) | delete_memories(ids) | remote_sync()",
             )
     }
@@ -479,6 +503,34 @@ fn format_compact(results: &[retrieve::CompactResult]) -> String {
     for r in results {
         let date = r.created_at.get(..10).unwrap_or(&r.created_at);
         out.push_str(&format!("[{:<18} {:.2}] {}  {}  ~{}c  {}\n", r.memory_type, r.importance, r.id, date, r.content_len, r.title));
+    }
+    out.push_str("---\n");
+    out
+}
+
+fn format_summary(results: &[retrieve::CompactResult]) -> String {
+    let mut out = format!("--- Memory Context ({} results) ---\n", results.len());
+    for r in results {
+        let date = r.created_at.get(..10).unwrap_or(&r.created_at);
+        out.push_str(&format!(
+            "[{:<18} {:.2}] {}  {}  ~{}c  {}\n",
+            r.memory_type, r.importance, r.id, date, r.content_len, r.title
+        ));
+        let facts: Vec<String> = r.facts_json.as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+        for fact in &facts {
+            out.push_str(&format!("  - {fact}\n"));
+        }
+        let tags: Vec<String> = r.tags_json.as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+        if !tags.is_empty() {
+            out.push_str(&format!("  tags: {}\n", tags.join(", ")));
+        }
+        if !facts.is_empty() || !tags.is_empty() {
+            out.push('\n');
+        }
     }
     out.push_str("---\n");
     out
