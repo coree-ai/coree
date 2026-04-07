@@ -1,10 +1,15 @@
 use anyhow::Result;
 use chrono::Utc;
 use rmcp::{
-    ServerHandler, ServiceExt,
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{Implementation, InitializeResult, ServerCapabilities},
-    tool, tool_handler, tool_router,
+    RoleServer, ServerHandler, ServiceExt,
+    handler::server::{router::{tool::ToolRouter, prompt::PromptRouter}, wrapper::Parameters},
+    model::{
+        GetPromptRequestParams, GetPromptResult, Implementation, InitializeResult,
+        ListPromptsResult, PaginatedRequestParams, PromptMessage, PromptMessageRole,
+        ServerCapabilities,
+    },
+    prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router,
+    service::RequestContext,
     transport::stdio,
 };
 use schemars::JsonSchema;
@@ -14,7 +19,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use std::path::PathBuf;
+
 use crate::{
+    remote,
     config::Config,
     db::Db,
     embed::Embedder,
@@ -31,7 +39,9 @@ struct MemsoServer {
     write_lock: WriteLock,
     session_id: String,
     project_id: String,
+    config: Arc<Config>,
     tool_router: ToolRouter<Self>,
+    prompt_router: PromptRouter<Self>,
 }
 
 // --- Tool input schemas ---
@@ -166,6 +176,47 @@ struct CaptureNoteInput {
 
 fn default_capture_context() -> String { "note".to_string() }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SeedCloudInput {
+    /// Overwrite remote database even if it already has data.
+    #[serde(default)]
+    force: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MigrateToTursoInput {
+    /// Turso database URL (e.g. libsql://mydb-org.turso.io). Leave empty to be prompted interactively.
+    #[serde(default)]
+    to_turso: Option<String>,
+}
+
+// --- Prompt implementations ---
+
+#[prompt_router]
+impl MemsoServer {
+    #[prompt(
+        name = "remote_enable",
+        description = "Enable remote sync by migrating the local memso database to a remote backend"
+    )]
+    async fn remote_enable(
+        &self,
+        Parameters(input): Parameters<MigrateToTursoInput>,
+    ) -> Vec<PromptMessage> {
+        let cmd = match input.to_turso {
+            Some(ref url) => format!("memso remote enable --url {url}"),
+            None => "memso remote enable".to_string(),
+        };
+        vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Please run `{cmd}` to enable remote sync for memso. \
+                 You will need --url <url> and --token <token> (get these from the Turso dashboard or `turso db show` / `turso db tokens create`). \
+                 Set REMOTE_AUTH_TOKEN in your environment and restart Claude Code when done."
+            ),
+        )]
+    }
+}
+
 // --- Tool implementations ---
 
 #[tool_router]
@@ -292,6 +343,13 @@ impl MemsoServer {
             })
     }
 
+    #[tool(description = "Seed remote database from the local backup. Checks: replica mode is configured, backup file exists. Aborts if remote already has data unless force=true.")]
+    async fn remote_sync(&self, Parameters(input): Parameters<SeedCloudInput>) -> Result<String, String> {
+        remote::sync(&self.config, input.force.unwrap_or(false))
+            .await
+            .map_err(|e| format!("remote_sync failed: {e}"))
+    }
+
     #[tool(description = "Delete a memory by ID.")]
     async fn delete_memory(&self, Parameters(input): Parameters<DeleteMemoryInput>) -> Result<String, String> {
         self.conn
@@ -306,9 +364,10 @@ impl MemsoServer {
 }
 
 #[tool_handler]
+#[prompt_handler]
 impl ServerHandler for MemsoServer {
     fn get_info(&self) -> InitializeResult {
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
             .with_server_info(Implementation::new("memso", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Persistent memory across sessions. \
@@ -327,7 +386,7 @@ impl ServerHandler for MemsoServer {
                  Tools: store_memory(content,type,title,[topic_key,importance,tags,facts,source,pinned]) | \
                  search_memory(query,[limit]) | get_memory(id) | get_memories(ids) | \
                  list_memories([type,tags,limit]) | capture_note(summary,[context]) | \
-                 pin_memory(id,pin) | delete_memory(id)",
+                 pin_memory(id,pin) | delete_memory(id) | remote_sync()",
             )
     }
 }
@@ -356,12 +415,41 @@ pub async fn run(config: Config) -> Result<()> {
         write_lock: store::new_write_lock(),
         session_id,
         project_id: pid,
+        config: Arc::new(config),
         tool_router: MemsoServer::tool_router(),
+        prompt_router: MemsoServer::prompt_router(),
     };
 
     let service = server.serve(stdio()).await?;
-    service.waiting().await?;
+
+    // Wait for the MCP client to disconnect OR a shutdown signal (SIGTERM/SIGINT).
+    // Awaiting the signal lets tokio flush pending async tasks and libsql write
+    // its WAL cleanly, preventing local replica corruption on Claude Code restart.
+    tokio::select! {
+        result = service.waiting() => { result?; }
+        _ = shutdown_signal() => {
+            eprintln!("memso: shutting down");
+        }
+    }
     Ok(())
+}
+
+async fn shutdown_signal() {
+    use tokio::signal;
+    let ctrl_c = async { signal::ctrl_c().await.ok() };
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
 }
 
 fn format_compact(results: &[retrieve::CompactResult]) -> String {

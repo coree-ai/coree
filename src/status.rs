@@ -11,7 +11,7 @@ pub async fn run(config: &Config) -> Result<()> {
     let conn = db.conn;
     migrations::run(&conn).await?;
 
-    let db_path = config.local_db_path();
+    let db_path = config.db_path();
     let mode = format!("{:?}", config.backend.mode).to_lowercase();
 
     let total: i64 = conn

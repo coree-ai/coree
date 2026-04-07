@@ -13,7 +13,7 @@ impl Db {
     pub async fn open(config: &Config) -> Result<Self> {
         let db = match config.backend.mode {
             BackendMode::Local => {
-                let path = config.local_db_path();
+                let path = config.db_path();
                 ensure_parent_dir(&path)?;
                 Builder::new_local(&path)
                     .build()
@@ -21,7 +21,7 @@ impl Db {
                     .with_context(|| format!("Failed to open local DB at {}", path.display()))?
             }
             BackendMode::Replica => {
-                let path = config.local_db_path();
+                let path = config.db_path();
                 ensure_parent_dir(&path)?;
                 let url = config
                     .backend
@@ -34,17 +34,72 @@ impl Db {
                     .as_deref()
                     .context("replica mode requires backend.auth_token")?;
                 let path_str = path.to_str().context("replica DB path is not valid UTF-8")?;
-                Builder::new_remote_replica(path_str, url.to_string(), token.to_string())
-                    .sync_interval(std::time::Duration::from_secs(1))
-                    .build()
-                    .await
-                    .with_context(|| format!("Failed to open replica DB at {}", path.display()))?
+                open_replica_with_recovery(path_str, path.as_ref(), url, token).await?
             }
         };
 
         let conn = db.connect().context("Failed to connect to database")?;
         Ok(Self { conn, _db: db })
     }
+}
+
+/// Open a remote replica, automatically recovering from local file corruption.
+///
+/// If the initial open fails (e.g. "database disk image is malformed" after a
+/// mid-write process kill), delete all local replica files and retry once.
+/// The remote is the source of truth, so this is always safe.
+async fn open_replica_with_recovery(
+    path_str: &str,
+    path: &Path,
+    url: &str,
+    token: &str,
+) -> Result<Database> {
+    let build = || {
+        Builder::new_remote_replica(path_str, url.to_string(), token.to_string())
+            .sync_interval(std::time::Duration::from_secs(1))
+            .build()
+    };
+
+    match build().await {
+        Ok(db) => Ok(db),
+        Err(first_err) => {
+            // Replica files (`memory.replica.db`) are distinct from local-mode files
+            // (`memory.db`), so purging is always safe - there is no risk of deleting
+            // the user's local database. The remote is the source of truth.
+            eprintln!(
+                "memso: replica open failed ({first_err:#}), purging local files and retrying..."
+            );
+            purge_replica_files(path)?;
+            build()
+                .await
+                .with_context(|| format!("Failed to open replica DB at {} (after recovery attempt)", path.display()))
+        }
+    }
+}
+
+/// Delete all libsql replica local files so the next open does a clean re-sync.
+/// Removes `<path>`, `<path>-shm`, `<path>-wal`, and `<path>-info`.
+fn purge_replica_files(path: &Path) -> Result<()> {
+    let suffixes = ["", "-shm", "-wal", "-info"];
+    for suffix in suffixes {
+        let candidate = if suffix.is_empty() {
+            path.to_path_buf()
+        } else {
+            let name = format!(
+                "{}{}",
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default(),
+                suffix
+            );
+            path.with_file_name(name)
+        };
+        if candidate.exists() {
+            std::fs::remove_file(&candidate)
+                .with_context(|| format!("Failed to remove {}", candidate.display()))?;
+        }
+    }
+    Ok(())
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<()> {

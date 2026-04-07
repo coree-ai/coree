@@ -32,6 +32,7 @@ fn basic_request(content: &str) -> store::StoreRequest {
         importance: Some(0.7),
         facts: vec![],
         source: None,
+        pinned: None,
     }
 }
 

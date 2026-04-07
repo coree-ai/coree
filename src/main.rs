@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use memso::{capture, config::Config, inject, install, serve, status};
+use memso::{capture, config::Config, inject, install, remote, serve, status};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -35,12 +35,10 @@ enum Command {
         #[arg(long, help = "Override project ID")]
         project: Option<String>,
     },
-    /// Migrate local database to Turso Cloud
-    Migrate {
-        #[arg(long, help = "Turso database URL to migrate to")]
-        to_turso: String,
-        #[arg(long, help = "Turso auth token")]
-        token: String,
+    /// Manage remote database sync
+    Remote {
+        #[command(subcommand)]
+        subcommand: RemoteCommand,
     },
     /// Install memso into Claude Code (adds MCP server + hooks to settings.json)
     Install {
@@ -49,6 +47,24 @@ enum Command {
     },
     /// Show current configuration and database status
     Status,
+}
+
+#[derive(Subcommand)]
+enum RemoteCommand {
+    /// Migrate local database to a remote backend and enable sync
+    Enable {
+        #[arg(long, help = "Remote database URL")]
+        url: Option<String>,
+        #[arg(long, help = "Auth token")]
+        token: Option<String>,
+        #[arg(long, help = "Overwrite remote database if it already has data")]
+        force: bool,
+    },
+    /// Seed an empty remote database from the local backup
+    Sync {
+        #[arg(long, help = "Overwrite remote database even if it already has data")]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -75,9 +91,18 @@ async fn main() -> Result<()> {
                 eprintln!("memso capture error: {e}");
             }
         }
-        Command::Migrate { to_turso, token } => {
-            eprintln!("migrate not yet implemented");
-            let _ = (to_turso, token);
+        Command::Remote { subcommand } => {
+            let cwd = std::env::current_dir()?;
+            let config = Config::load(&cwd)?;
+            match subcommand {
+                RemoteCommand::Enable { url, token, force } => {
+                    remote::enable(&config, url, token, force).await?;
+                }
+                RemoteCommand::Sync { force } => {
+                    let msg = remote::sync(&config, force).await?;
+                    println!("{msg}");
+                }
+            }
         }
         Command::Install { dry_run } => {
             let result = install::run(dry_run)?;
@@ -128,4 +153,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-

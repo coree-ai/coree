@@ -72,17 +72,45 @@ impl Config {
         Ok(Config::default())
     }
 
-    /// Resolve "${VAR}" references in auth_token.
+    /// Resolve auth_token: expand "${VAR}" syntax, then fall back to REMOTE_AUTH_TOKEN env var.
     fn resolve_env_vars(&mut self) {
         if let Some(token) = &self.backend.auth_token
             && let Some(var) = token.strip_prefix("${").and_then(|s| s.strip_suffix('}'))
         {
             self.backend.auth_token = env::var(var).ok();
         }
+        if self.backend.auth_token.is_none() {
+            self.backend.auth_token = env::var("REMOTE_AUTH_TOKEN").ok();
+        }
     }
 
-    /// Resolved local DB path, defaulting to `.memso.db` in the config file's
-    /// directory, or CWD if no config file was found.
+    /// Resolved DB path for the current backend mode.
+    /// - Local mode:   `.memso/memory.db`
+    /// - Replica mode: `.memso/memory.replica.db`
+    ///
+    /// Keeping distinct filenames means switching modes never overwrites or corrupts
+    /// the other mode's data, and the local file serves as a natural backup after
+    /// `memso remote enable` without any explicit rename step.
+    pub fn db_path(&self) -> PathBuf {
+        if let Some(ref p) = self.backend.local_path {
+            return PathBuf::from(p);
+        }
+        let base = self
+            .source_path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let filename = match self.backend.mode {
+            BackendMode::Local => "memory.db",
+            BackendMode::Replica => "memory.replica.db",
+        };
+        base.join(".memso").join(filename)
+    }
+
+    /// Always returns the local-mode DB path (`.memso/memory.db`), regardless of
+    /// the current backend mode. Used by `remote enable` and `remote sync` as the
+    /// source/seed database - it is the natural backup after switching to replica mode.
     pub fn local_db_path(&self) -> PathBuf {
         if let Some(ref p) = self.backend.local_path {
             return PathBuf::from(p);
@@ -125,17 +153,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_db_path_defaults_relative_to_config() {
+    fn db_path_local_mode() {
         let mut cfg = Config::default();
         cfg.source_path = Some(PathBuf::from("/some/project/.memso.toml"));
-        assert_eq!(cfg.local_db_path(), PathBuf::from("/some/project/.memso/memory.db"));
+        assert_eq!(cfg.db_path(), PathBuf::from("/some/project/.memso/memory.db"));
     }
 
     #[test]
-    fn local_db_path_respects_override() {
+    fn db_path_replica_mode() {
+        let mut cfg = Config::default();
+        cfg.backend.mode = BackendMode::Replica;
+        cfg.source_path = Some(PathBuf::from("/some/project/.memso.toml"));
+        assert_eq!(cfg.db_path(), PathBuf::from("/some/project/.memso/memory.replica.db"));
+    }
+
+    #[test]
+    fn db_path_respects_override() {
         let mut cfg = Config::default();
         cfg.backend.local_path = Some("/custom/path.db".to_string());
-        assert_eq!(cfg.local_db_path(), PathBuf::from("/custom/path.db"));
+        assert_eq!(cfg.db_path(), PathBuf::from("/custom/path.db"));
+    }
+
+    #[test]
+    fn local_db_path_always_returns_memory_db() {
+        let mut cfg = Config::default();
+        cfg.backend.mode = BackendMode::Replica;
+        cfg.source_path = Some(PathBuf::from("/some/project/.memso.toml"));
+        assert_eq!(cfg.local_db_path(), PathBuf::from("/some/project/.memso/memory.db"));
     }
 
     #[test]

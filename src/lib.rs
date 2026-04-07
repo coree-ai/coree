@@ -4,6 +4,7 @@ pub mod db;
 pub mod embed;
 pub mod inject;
 pub mod install;
+pub mod remote;
 pub mod migrations;
 pub mod project_id;
 pub mod retrieve;
