@@ -401,10 +401,15 @@ pub async fn list(
 }
 
 fn build_fts_query(query: &str) -> String {
-    // Wrap each word so FTS5 treats them as prefix matches
+    // FTS5 tokens may only contain alphanumerics and underscores.
+    // Strip other characters (e.g. "." in "install.rs") to avoid syntax errors,
+    // then append "*" for prefix matching. Drop tokens that become empty.
     query
         .split_whitespace()
-        .map(|w| format!("{w}*"))
+        .filter_map(|w| {
+            let clean: String = w.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
+            if clean.is_empty() { None } else { Some(format!("{clean}*")) }
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -454,6 +459,17 @@ mod tests {
     #[test]
     fn build_fts_query_empty_input() {
         assert_eq!(build_fts_query(""), "");
+    }
+
+    #[test]
+    fn build_fts_query_strips_dots() {
+        // "install.rs" -> "installrs*", "settings.json" -> "settingsjson*"
+        assert_eq!(build_fts_query("install.rs settings.json"), "installrs* settingsjson*");
+    }
+
+    #[test]
+    fn build_fts_query_drops_punctuation_only_tokens() {
+        assert_eq!(build_fts_query("hello ... world"), "hello* world*");
     }
 }
 
