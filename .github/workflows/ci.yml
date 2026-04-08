@@ -44,8 +44,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: macos-latest        # Apple Silicon (arm64)
             target: aarch64-apple-darwin
-          - os: macos-latest        # Intel Mac (x86_64) - cross-compiled from ARM runner
-            target: x86_64-apple-darwin
           - os: ubuntu-24.04-arm   # Linux ARM64 (Graviton, Raspberry Pi, etc.)
             target: aarch64-unknown-linux-gnu
           - os: windows-latest
