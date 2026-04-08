@@ -23,45 +23,15 @@ search_memory(query,[limit,detail]) | get_memories(ids) | \
 list_memories([type,tags,limit,detail]) | capture_note(summary,[context]) | \
 pin_memories(ids,pin) | delete_memories(ids)\n";
 
-fn build_session_instructions(
-    captures_path: Option<&std::path::Path>,
-    memories_path: Option<&std::path::Path>,
-) -> String {
-    let mut steps: Vec<String> = Vec::new();
-
-    if let Some(path) = captures_path {
-        steps.push(format!(
-            "READ AND SYNTHESISE CAPTURES — open this file NOW: {}\n   \
-             Read ALL entries together, then store memories for any discoveries, \
-             non-obvious outcomes, bugs found, or decisions made — synthesising across \
-             the full set, not one memory per entry. Routine edits and builds with no \
-             finding do not need a memory. Bugs/failures: type=gotcha, importance>=0.8. \
-             All stored memories: source='reviewed'. If nothing is worth storing, skip \
-             the store call. This step is mandatory — do not defer.",
+fn build_session_instructions(session_path: Option<&std::path::Path>) -> String {
+    match session_path {
+        None => String::new(),
+        Some(path) => format!(
+            "[memso] Session start — BEFORE responding to the user, read this file \
+             completely and execute every instruction defined in it: {}\n",
             path.display()
-        ));
+        ),
     }
-
-    if let Some(path) = memories_path {
-        steps.push(format!(
-            "READ MEMORY CONTENT — open this file NOW: {}\n   \
-             Read it in full before responding. It contains your highest-priority memories \
-             from previous sessions. The compact index below is a prioritised subset — \
-             fetch relevant entries by ID with get_memories(ids) as needed during the session.",
-            path.display()
-        ));
-    }
-
-    if steps.is_empty() {
-        return String::new();
-    }
-
-    let mut out =
-        String::from("[memso] Session start — BEFORE responding, complete ALL steps:\n");
-    for (i, step) in steps.iter().enumerate() {
-        out.push_str(&format!("{}. {}\n", i + 1, step));
-    }
-    out
 }
 
 pub async fn run(
@@ -171,66 +141,56 @@ async fn run_session(
 ) -> Result<()> {
     let pid = std::process::id();
 
-    // Write pending captures to a temp file and mark them as presented.
-    // Write before marking so a file-write failure leaves captures unPresented.
     let captures = query_pending_captures(conn, project_id).await?;
-    let captures_path = if !captures.is_empty() {
-        let path = std::env::temp_dir().join(format!("memso-captures-{pid}.txt"));
-        std::fs::write(&path, format_captures_file(&captures))?;
-        mark_captures_presented(conn, project_id).await?;
-        Some(path)
-    } else {
-        None
-    };
 
     // List all memories above the importance floor sorted by retention score.
     let results = retrieve::list(conn, project_id, None, &[], 500, 0.4).await?;
 
-    // Write full memory content to a temp file.
+    // Build full memory content for the session file.
     let mut included_in_file = 0usize;
-    let memories_path = if !results.is_empty() {
+    let mut memories_content = String::new();
+    if !results.is_empty() {
         let all_ids: Vec<String> = results.iter().map(|r| r.id.clone()).collect();
         let full_memories = retrieve::get_full_batch(conn, &all_ids).await?;
         let full_map: std::collections::HashMap<String, retrieve::FullMemory> =
             full_memories.into_iter().map(|m| (m.id.clone(), m)).collect();
 
-        let mut content = String::from(
-            "[memso] Session memory content — full text for top memories.\n\
-             Read in full before responding to restore context from previous sessions.\n\n",
-        );
         let mut accumulated = 0usize;
         for (i, compact) in results.iter().enumerate() {
             if let Some(mem) = full_map.get(&compact.id) {
                 let entry = format_full_memory(mem);
                 accumulated += entry.len();
-                content.push_str(&entry);
+                memories_content.push_str(&entry);
                 included_in_file = i + 1;
                 if accumulated >= FULL_CONTENT_BUDGET {
                     break;
                 }
             }
         }
+    }
 
-        let path = std::env::temp_dir().join(format!("memso-memories-{pid}.txt"));
-        std::fs::write(&path, content)?;
+    // Write a single session file when either section has content.
+    // Write before marking captures presented so a write failure leaves them unpresented.
+    let session_path = if !captures.is_empty() || !memories_content.is_empty() {
+        let path = std::env::temp_dir().join(format!("memso-session-{pid}.txt"));
+        std::fs::write(&path, format_session_file(&captures, &memories_content))?;
+        if !captures.is_empty() {
+            mark_captures_presented(conn, project_id).await?;
+        }
         Some(path)
     } else {
         None
     };
 
-    // Build stdout: instructions + dynamic session steps + compact index.
-    // Only memories not already written to the full file appear in the compact index.
-    // Kept under budget so it is always delivered inline, never saved to a file.
+    // Build stdout: single file instruction + compact index.
+    // Only memories not already written to the session file appear in the compact index.
     let mut output = INSTRUCTIONS.to_string();
-    output.push_str(&build_session_instructions(
-        captures_path.as_deref(),
-        memories_path.as_deref(),
-    ));
+    output.push_str(&build_session_instructions(session_path.as_deref()));
     if !results.is_empty() {
         output.push_str(&format_compact(
             &results[included_in_file..],
             included_in_file,
-            memories_path.as_deref(),
+            session_path.as_deref(),
         ));
     }
 
@@ -280,21 +240,72 @@ async fn mark_captures_presented(conn: &libsql::Connection, project_id: &str) ->
     Ok(())
 }
 
-fn format_captures_file(captures: &[PendingCapture]) -> String {
-    let mut out = format!(
-        "[memso] Pending Review — {} captures from previous session activity.\n\
-         Read ALL entries together. Store memories only for discoveries and non-obvious outcomes:\n\
-         - Bugs/failures: type=gotcha, importance>=0.8, source='reviewed'\n\
-         - Other findings: appropriate type, source='reviewed'\n\
-         - Routine edits/builds with no finding: no memory needed\n\n\
-         --- Captures ---\n",
-        captures.len()
+fn format_session_file(captures: &[PendingCapture], memories_content: &str) -> String {
+    let mut out = String::from(
+        "MANDATORY PROCESS — VIOLATION IF SKIPPED.\n\
+         These instructions exist to restore project context so your response is accurate, \
+         relevant, and high-quality. Skipping them means responding without critical background \
+         knowledge, which produces worse answers. The user knows this step happens first and \
+         expects it.\n\n\
+         Before writing any response to the user, you must:\n\
+         1. Read this file completely, from top to bottom.\n\
+         2. Execute every instruction in it.\n\n\
+         Your first output line must be exactly: [memso: init]\n\
+         This is required even if the user's request is trivial or urgent.\n\
+         Skipping, abbreviating, or deferring any part of this is a critical process violation \
+         that directly harms the quality of your response.\n\n",
     );
-    for c in captures {
-        let date = c.captured_at.get(..10).unwrap_or(&c.captured_at);
-        out.push_str(&format!("[{:<12}] {}  {}\n", c.tool_name, date, c.summary));
+
+    // Section 1: Raw captures
+    out.push_str("=== SECTION 1: RAW CAPTURES ===\n");
+    if captures.is_empty() {
+        out.push_str("(none)\n");
+    } else {
+        out.push_str(&format!(
+            "{} captures from previous session activity.\n\
+             Read ALL entries together. Store memories only for non-obvious discoveries:\n\
+             - Bugs/failures: type=gotcha, importance>=0.8, source='reviewed'\n\
+             - Other findings: appropriate type, source='reviewed'\n\
+             - Routine edits/builds with no finding: no memory needed\n\n\
+             --- Captures ---\n",
+            captures.len()
+        ));
+        for c in captures {
+            let date = c.captured_at.get(..10).unwrap_or(&c.captured_at);
+            out.push_str(&format!("[{:<12}] {}  {}\n", c.tool_name, date, c.summary));
+        }
+        out.push_str("---\n");
     }
-    out.push_str("---\n");
+    out.push_str("=== END SECTION 1 ===\n");
+    if captures.is_empty() {
+        out.push_str(
+            "Instruction: output exactly \"No raw captures to process from last session.\"\n\n",
+        );
+    } else {
+        out.push_str(
+            "Instruction: store memories for any non-obvious discoveries above \
+             (source='reviewed'), then output a one-sentence summary: \
+             \"Captures: [what was found and stored, or 'nothing worth storing']\"\n\n",
+        );
+    }
+
+    // Section 2: Prior memories
+    out.push_str("=== SECTION 2: PRIOR MEMORIES ===\n");
+    if memories_content.is_empty() {
+        out.push_str("(none)\n");
+    } else {
+        out.push_str(memories_content);
+    }
+    out.push_str("=== END SECTION 2 ===\n");
+    if memories_content.is_empty() {
+        out.push_str("Instruction: output exactly \"No prior memories for this project.\"\n");
+    } else {
+        out.push_str(
+            "Instruction: output a one-sentence summary of the most important context \
+             restored: \"Memories: [key context]\"\n",
+        );
+    }
+
     out
 }
 

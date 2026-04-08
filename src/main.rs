@@ -27,7 +27,7 @@ enum Command {
         query: Option<String>,
         #[arg(long, default_value_t = 5)]
         limit: usize,
-        #[arg(long, default_value_t = 8000, help = "Max output characters")]
+        #[arg(long, default_value_t = 9500, help = "Max output bytes")]
         budget: usize,
     },
     /// Capture a PostToolUse hook event for later review at session start
