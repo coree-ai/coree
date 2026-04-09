@@ -19,8 +19,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use std::path::PathBuf;
-
 use crate::{
     remote,
     config::Config,
@@ -186,11 +184,6 @@ struct PinMemoriesInput {
     pin: bool,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct DeleteMemoryInput {
-    /// ID of the memory to delete.
-    id: String,
-}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct CaptureNoteInput {
