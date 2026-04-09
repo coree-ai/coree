@@ -1,7 +1,5 @@
 use anyhow::{bail, Context, Result};
 use libsql::{Builder, Connection};
-use std::path::PathBuf;
-
 use crate::config::{BackendMode, Config};
 
 pub async fn enable(
@@ -214,7 +212,7 @@ async fn copy_memories(local: &Connection, remote: &Connection, total: i64) -> R
             )
             .await?;
         count += 1;
-        if total > 0 && count % 10 == 0 {
+        if total > 0 && count.is_multiple_of(10) {
             println!("      {count}/{total} memories ...");
         }
     }
