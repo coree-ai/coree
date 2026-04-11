@@ -456,13 +456,18 @@ pub async fn list(
 
 fn build_fts_query(query: &str) -> String {
     // FTS5 tokens may only contain alphanumerics and underscores.
-    // Strip other characters (e.g. "." in "install.rs") to avoid syntax errors,
-    // then append "*" for prefix matching. Drop tokens that become empty.
+    // Strip other characters (e.g. "." in "install.rs") to avoid syntax errors.
+    //
+    // Each token is wrapped in double quotes before the "*" suffix: `"token"*`
+    // This is required because FTS5 treats bare words like "and", "or", "not", "near"
+    // as query operators, producing a syntax error when followed by "*".
+    // Quoting a single term (`"token"*`) is valid FTS5 prefix-phrase syntax and
+    // is semantically identical to `token*` for non-reserved words.
     query
         .split_whitespace()
         .filter_map(|w| {
             let clean: String = w.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
-            if clean.is_empty() { None } else { Some(format!("{clean}*")) }
+            if clean.is_empty() { None } else { Some(format!("\"{clean}\"*")) }
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -507,7 +512,7 @@ mod tests {
 
     #[test]
     fn build_fts_query_appends_wildcards() {
-        assert_eq!(build_fts_query("hello world"), "hello* world*");
+        assert_eq!(build_fts_query("hello world"), "\"hello\"* \"world\"*");
     }
 
     #[test]
@@ -517,13 +522,20 @@ mod tests {
 
     #[test]
     fn build_fts_query_strips_dots() {
-        // "install.rs" -> "installrs*", "settings.json" -> "settingsjson*"
-        assert_eq!(build_fts_query("install.rs settings.json"), "installrs* settingsjson*");
+        // "install.rs" -> "\"installrs\"*", "settings.json" -> "\"settingsjson\"*"
+        assert_eq!(build_fts_query("install.rs settings.json"), "\"installrs\"* \"settingsjson\"*");
     }
 
     #[test]
     fn build_fts_query_drops_punctuation_only_tokens() {
-        assert_eq!(build_fts_query("hello ... world"), "hello* world*");
+        assert_eq!(build_fts_query("hello ... world"), "\"hello\"* \"world\"*");
+    }
+
+    #[test]
+    fn build_fts_query_quotes_reserved_words() {
+        // "and", "or", "not", "near" are FTS5 operators; quoting prevents syntax errors.
+        assert_eq!(build_fts_query("hello and world"), "\"hello\"* \"and\"* \"world\"*");
+        assert_eq!(build_fts_query("not this"), "\"not\"* \"this\"*");
     }
 }
 
