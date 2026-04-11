@@ -72,7 +72,7 @@ impl Config {
         Ok(Config::default())
     }
 
-    /// Resolve auth_token: expand "${VAR}" syntax, then fall back to REMOTE_AUTH_TOKEN env var.
+    /// Resolve auth_token: expand "${VAR}" syntax, then fall back to MEMSO_REMOTE_AUTH_TOKEN env var.
     fn resolve_env_vars(&mut self) {
         self.resolve_env_vars_with(|k| env::var(k).ok());
     }
@@ -84,7 +84,7 @@ impl Config {
             self.backend.auth_token = env(var);
         }
         if self.backend.auth_token.is_none() {
-            self.backend.auth_token = env("REMOTE_AUTH_TOKEN");
+            self.backend.auth_token = env("MEMSO_REMOTE_AUTH_TOKEN");
         }
     }
 
@@ -110,6 +110,26 @@ impl Config {
             BackendMode::Replica => "memory.replica.db",
         };
         base.join(".memso").join(filename)
+    }
+
+    /// Path to the lock file held exclusively by `memso serve` for its entire lifetime.
+    /// The OS releases the lock automatically on any exit (clean, crash, or SIGKILL),
+    /// so there are no stale files. `memso inject` uses a non-blocking lock attempt
+    /// to detect whether the server is currently running.
+    pub fn serve_lock_path(&self) -> PathBuf {
+        self.db_path()
+            .parent()
+            .map(|p| p.join("serve.lock"))
+            .unwrap_or_else(|| PathBuf::from("serve.lock"))
+    }
+
+    /// Path to the ready file written by `memso serve` once the DB and embedder are loaded.
+    /// Absent while syncing; present when tools are available.
+    pub fn serve_ready_path(&self) -> PathBuf {
+        self.db_path()
+            .parent()
+            .map(|p| p.join("serve.ready"))
+            .unwrap_or_else(|| PathBuf::from("serve.ready"))
     }
 
     /// Always returns the local-mode DB path (`.memso/memory.db`), regardless of
@@ -206,9 +226,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_env_vars_falls_back_to_remote_auth_token() {
+    fn resolve_env_vars_falls_back_to_memso_remote_auth_token() {
         let env = std::collections::HashMap::from([
-            ("REMOTE_AUTH_TOKEN", "fallback-token"),
+            ("MEMSO_REMOTE_AUTH_TOKEN", "fallback-token"),
         ]);
         let mut cfg = Config::default();
         cfg.resolve_env_vars_with(|k| env.get(k).map(|s| s.to_string()));
