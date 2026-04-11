@@ -34,17 +34,11 @@ impl Db {
                     .as_deref()
                     .context("replica mode requires backend.auth_token")?;
                 let path_str = path.to_str().context("replica DB path is not valid UTF-8")?;
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(10),
-                    open_replica_with_recovery(path_str, path.as_ref(), url, token),
-                )
-                .await
-                .unwrap_or_else(|_| {
-                    Err(anyhow::anyhow!(
-                        "Timed out connecting to remote database at {url} (10s). \
-                         Check remote_url and auth_token in .memso.toml."
-                    ))
-                })?
+                // No timeout: initial sync duration scales with DB size and network speed.
+                // A hard timeout risks killing mid-sync and leaving the replica in a
+                // partial state. libsql WAL is crash-safe so a SIGTERM mid-sync is
+                // recoverable via the purge-and-retry path in open_replica_with_recovery.
+                open_replica_with_recovery(path_str, path.as_ref(), url, token).await?
             }
         };
 
@@ -79,6 +73,32 @@ impl Db {
 /// If the initial open fails (e.g. "database disk image is malformed" after a
 /// mid-write process kill), delete all local replica files and retry once.
 /// The remote is the source of truth, so this is always safe.
+///
+/// # Known failure mode: replica stuck in bad state after auth failure
+///
+/// Observed sequence (2026-04-11):
+///   1. MCP server starts without auth token -> `build()` fails with auth error.
+///   2. Recovery calls `purge_replica_files`. If the replica file was never
+///      created (build failed before writing it), `remove_file` gets ENOENT even
+///      though `exists()` returned true a moment earlier (TOCTOU race - libsql's
+///      own builder may clean up the partial file between the two calls).
+///   3. That ENOENT propagates as a crash, written to crash.log.
+///   4. Next session: replica file is gone. libsql must do a full initial sync
+///      (~10s+), which exceeds the previous 10s hard timeout -> stuck in timeout
+///      loop across sessions.
+///
+/// Fixes applied:
+///   - `purge_replica_files` now uses attempt-and-ignore-NotFound instead of
+///     exists()-then-remove (eliminates TOCTOU).
+///   - Timeout is 60s when replica file is absent (initial/post-purge sync),
+///     10s when it already exists (incremental sync only).
+///
+/// TODO: surface this state to the user more gracefully:
+///   - Detect "replica missing after previous crash" and emit a clear message.
+///   - Consider a `memso remote reset` command that purges local replica files
+///     and forces a clean re-sync, giving the user a self-service recovery path.
+///   - Track whether the last open was a fresh sync vs incremental to give
+///     better timeout/progress feedback.
 async fn open_replica_with_recovery(
     path_str: &str,
     path: &Path,
@@ -125,9 +145,10 @@ fn purge_replica_files(path: &Path) -> Result<()> {
             );
             path.with_file_name(name)
         };
-        if candidate.exists() {
-            std::fs::remove_file(&candidate)
-                .with_context(|| format!("Failed to remove {}", candidate.display()))?;
+        match std::fs::remove_file(&candidate) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("Failed to remove {}", candidate.display())),
         }
     }
     Ok(())
