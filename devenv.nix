@@ -14,6 +14,7 @@
     gh
     python3
     sqld
+    sqlite
     turso-cli
     upx
   ];
