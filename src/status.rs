@@ -4,8 +4,7 @@ use libsql::params;
 use crate::{config::Config, db::Db, migrations, project_id};
 
 pub async fn run(config: &Config) -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let pid = project_id::resolve(&cwd, config.memory.project_id.as_deref());
+    let pid = project_id::resolve(&config.project_root, config.memory.project_id.as_deref());
 
     let db = Db::open(config).await?;
     let conn = db.conn;

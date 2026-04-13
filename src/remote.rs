@@ -284,11 +284,10 @@ async fn copy_captures(local: &Connection, remote: &Connection) -> Result<usize>
 }
 
 fn update_config(config: &Config, remote_url: &str) -> Result<()> {
-    let config_path = config.source_path.clone().unwrap_or_else(|| {
-        std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .join(".memso.toml")
-    });
+    let config_path = config
+        .source_path
+        .clone()
+        .unwrap_or_else(|| config.project_root.join(".memso.toml"));
 
     let existing = if config_path.exists() {
         std::fs::read_to_string(&config_path)

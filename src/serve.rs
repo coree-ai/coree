@@ -570,8 +570,7 @@ async fn reembed_stale(conn: Arc<libsql::Connection>, embedder: Arc<Mutex<Embedd
 }
 
 pub async fn run(config: Config) -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let pid = project_id::resolve(&cwd, config.memory.project_id.as_deref());
+    let pid = project_id::resolve(&config.project_root, config.memory.project_id.as_deref());
 
     // Set up crash log path and panic hook before any fallible work.
     // Any error (panic or otherwise) that occurs after this point is written to

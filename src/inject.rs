@@ -123,7 +123,7 @@ async fn run_inner(
     migrations::run(&conn).await?;
 
     let pid = project_override
-        .unwrap_or_else(|| project_id::resolve(&cwd, config.memory.project_id.as_deref()));
+        .unwrap_or_else(|| project_id::resolve(&config.project_root, config.memory.project_id.as_deref()));
 
     match inject_type {
         "session" | "compact" => run_session(&conn, &pid, budget).await,
