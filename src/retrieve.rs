@@ -171,64 +171,65 @@ pub async fn search(
         return Ok(vec![]);
     }
 
-    // Fetch metadata for scoring.
-    // Note: queries each ID individually to avoid dynamic IN-clause construction.
-    // Acceptable for typical candidate set sizes (limit * 2 ≤ ~40).
+    // Fetch metadata for all candidates in a single IN query.
     let now = Utc::now();
+    let placeholders = all_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let meta_sql = format!(
+        "SELECT id, type, title, created_at, importance, access_count, last_accessed, source,
+                length(content), facts, tags
+         FROM memories WHERE id IN ({placeholders}) AND status = 'active'"
+    );
+    let mut rows = conn
+        .query(&meta_sql, params_from_iter(all_ids.iter().cloned()))
+        .await?;
+
     let mut scored: Vec<CompactResult> = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let id: String = row.get(0)?;
+        let memory_type: String = row.get(1)?;
+        let title: String = row.get(2)?;
+        let created_at: String = row.get(3)?;
+        let importance: f64 = row.get(4)?;
+        let access_count: i64 = row.get(5)?;
+        let last_accessed: Option<String> = row.get(6).ok();
+        let source: String = row.get(7).unwrap_or_else(|_| "realtime".to_string());
+        let content_len: i64 = row.get(8).unwrap_or(0);
+        let facts_json: Option<String> = row.get(9).ok();
+        let tags_json: Option<String> = row.get(10).ok();
 
-    for id in &all_ids {
-        let mut rows = conn
-            .query(
-                "SELECT id, type, title, created_at, importance, access_count, last_accessed, source,
-                        length(content), facts, tags
-                 FROM memories WHERE id = ?1",
-                params![id.clone()],
-            )
-            .await?;
+        let days = days_since(last_accessed.as_deref().unwrap_or(&created_at), &now);
+        let ret = retention_score(&memory_type, importance, days, access_count, &source);
 
-        if let Some(row) = rows.next().await? {
-            let id: String = row.get(0)?;
-            let memory_type: String = row.get(1)?;
-            let title: String = row.get(2)?;
-            let created_at: String = row.get(3)?;
-            let importance: f64 = row.get(4)?;
-            let access_count: i64 = row.get(5)?;
-            let last_accessed: Option<String> = row.get(6).ok();
-            let source: String = row.get(7).unwrap_or_else(|_| "realtime".to_string());
-            let content_len: i64 = row.get(8).unwrap_or(0);
-            let facts_json: Option<String> = row.get(9).ok();
-            let tags_json: Option<String> = row.get(10).ok();
+        let rrf_v = vector_ranks
+            .get(&id)
+            .map(|&r| 1.0 / (RRF_K + r as f64))
+            .unwrap_or(0.0);
+        let rrf_b = bm25_ranks
+            .get(&id)
+            .map(|&r| 1.0 / (RRF_K + r as f64))
+            .unwrap_or(0.0);
+        let boost = source_boost(query, &memory_type);
+        let score = (rrf_v + rrf_b) * ret * boost;
 
-            let days = days_since(last_accessed.as_deref().unwrap_or(&created_at), &now);
-            let ret = retention_score(&memory_type, importance, days, access_count, &source);
-
-            let rrf_v = vector_ranks
-                .get(&id)
-                .map(|&r| 1.0 / (RRF_K + r as f64))
-                .unwrap_or(0.0);
-            let rrf_b = bm25_ranks
-                .get(&id)
-                .map(|&r| 1.0 / (RRF_K + r as f64))
-                .unwrap_or(0.0);
-            let boost = source_boost(query, &memory_type);
-            let score = (rrf_v + rrf_b) * ret * boost;
-
-            scored.push(CompactResult { id, memory_type, title, created_at, importance, score, content_len: content_len as usize, facts_json, tags_json });
-        }
+        scored.push(CompactResult { id, memory_type, title, created_at, importance, score, content_len: content_len as usize, facts_json, tags_json });
     }
 
     scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);
 
-    // Increment access counts
-    for r in &scored {
-        let _ = conn
-            .execute(
-                "UPDATE memories SET access_count = access_count + 1, last_accessed = ?1 WHERE id = ?2",
-                params![now.to_rfc3339(), r.id.clone()],
-            )
-            .await;
+    // Increment access counts for all returned results in a single query.
+    if !scored.is_empty() {
+        let ids: Vec<String> = scored.iter().map(|r| r.id.clone()).collect();
+        let update_placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let update_sql = format!(
+            "UPDATE memories SET access_count = access_count + 1, last_accessed = ? \
+             WHERE id IN ({update_placeholders})"
+        );
+        let update_params: Vec<libsql::Value> =
+            std::iter::once(libsql::Value::Text(now.to_rfc3339()))
+                .chain(ids.into_iter().map(libsql::Value::Text))
+                .collect();
+        let _ = conn.execute(&update_sql, params_from_iter(update_params)).await;
     }
 
     Ok(scored)
@@ -360,14 +361,19 @@ pub async fn search_bm25(
         });
     }
 
-    // Update access counts
-    for r in &results {
-        let _ = conn
-            .execute(
-                "UPDATE memories SET access_count = access_count + 1, last_accessed = ?1 WHERE id = ?2",
-                params![now.to_rfc3339(), r.id.clone()],
-            )
-            .await;
+    // Increment access counts for all returned results in a single query.
+    if !results.is_empty() {
+        let ids: Vec<String> = results.iter().map(|r| r.id.clone()).collect();
+        let update_placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let update_sql = format!(
+            "UPDATE memories SET access_count = access_count + 1, last_accessed = ? \
+             WHERE id IN ({update_placeholders})"
+        );
+        let update_params: Vec<libsql::Value> =
+            std::iter::once(libsql::Value::Text(now.to_rfc3339()))
+                .chain(ids.into_iter().map(libsql::Value::Text))
+                .collect();
+        let _ = conn.execute(&update_sql, params_from_iter(update_params)).await;
     }
 
     Ok(results)
@@ -383,32 +389,40 @@ pub async fn list(
 ) -> Result<Vec<CompactResult>> {
     let now = Utc::now();
 
-    // Fetch a ceiling of candidates ordered by recency; scoring and filtering
+    // Fetch a ceiling of candidates ordered by recency; scoring and tag filtering
     // happen in-process. The ceiling is generous so important older memories
-    // are not dropped before scoring.
+    // are not dropped before scoring. Type filter applied in SQL when present.
     let ceiling = (limit * 4).max(200) as i64;
-    let mut rows = conn
-        .query(
-            "SELECT id, type, title, created_at, importance, access_count, last_accessed, source, tags,
-                    length(content), facts
-             FROM memories
-             WHERE project_id = ?1 AND status = 'active' AND importance >= ?2
-             ORDER BY created_at DESC
-             LIMIT ?3",
+    let (type_clause, type_param) = match filter_type {
+        Some(t) => (" AND type = ?4", Some(t.to_string())),
+        None => ("", None),
+    };
+    let sql = format!(
+        "SELECT id, type, title, created_at, importance, access_count, last_accessed, source, tags,
+                length(content), facts
+         FROM memories
+         WHERE project_id = ?1 AND status = 'active' AND importance >= ?2
+         {type_clause}
+         ORDER BY created_at DESC
+         LIMIT ?3"
+    );
+    let mut rows = if let Some(ref tp) = type_param {
+        conn.query(
+            &sql,
+            params![project_id.to_string(), min_importance, ceiling, tp.clone()],
+        )
+        .await?
+    } else {
+        conn.query(
+            &sql,
             params![project_id.to_string(), min_importance, ceiling],
         )
-        .await?;
+        .await?
+    };
 
-    // Collect candidates for post-query filtering.
     let mut candidates: Vec<CompactResult> = Vec::new();
     while let Some(row) = rows.next().await? {
         let memory_type: String = row.get(1)?;
-
-        if let Some(ft) = filter_type
-            && memory_type != ft
-        {
-            continue;
-        }
 
         let created_at: String = row.get(3)?;
         let importance: f64 = row.get(4)?;
