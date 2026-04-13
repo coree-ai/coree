@@ -21,20 +21,18 @@ pub async fn run(conn: &Connection) -> Result<()> {
 
     // v1 -> v2: add embed_model column to memory_vectors.
     // Databases created after this change already have the column (from the base SCHEMA);
-    // the PRAGMA check makes the ALTER TABLE idempotent for both old and new databases.
+    // the probe SELECT makes the ALTER TABLE idempotent for both old and new databases.
+    // Note: PRAGMA table_info does not work over the Hrana remote protocol (Turso direct
+    // mode), so we use a zero-row SELECT to test column existence instead.
     // Existing rows are backfilled with the current model_id so they are not re-embedded.
     if version < 2 {
-        let mut rows = conn
-            .query("PRAGMA table_info(memory_vectors)", libsql::params![])
-            .await?;
-        let mut has_col = false;
-        while let Some(row) = rows.next().await? {
-            let name: String = row.get(1)?;
-            if name == "embed_model" {
-                has_col = true;
-                break;
-            }
-        }
+        let has_col = conn
+            .query(
+                "SELECT embed_model FROM memory_vectors LIMIT 0",
+                libsql::params![],
+            )
+            .await
+            .is_ok();
         if !has_col {
             conn.execute(
                 "ALTER TABLE memory_vectors ADD COLUMN embed_model TEXT NOT NULL DEFAULT ''",
