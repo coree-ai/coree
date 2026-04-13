@@ -225,6 +225,7 @@ pub async fn search(
 pub async fn get_full_batch(
     conn: &libsql::Connection,
     ids: &[String],
+    project_id: &str,
 ) -> Result<Vec<FullMemory>> {
     if ids.is_empty() {
         return Ok(Vec::new());
@@ -233,10 +234,13 @@ pub async fn get_full_batch(
     let sql = format!(
         "SELECT id, project_id, type, title, content, facts, tags,
                 importance, access_count, pinned, status, created_at, updated_at
-         FROM memories WHERE id IN ({placeholders})"
+         FROM memories WHERE id IN ({placeholders}) AND project_id = ?"
     );
+    let select_params: Vec<libsql::Value> = ids.iter().cloned().map(libsql::Value::Text)
+        .chain(std::iter::once(libsql::Value::Text(project_id.to_string())))
+        .collect();
     let mut rows = conn
-        .query(&sql, params_from_iter(ids.iter().cloned()))
+        .query(&sql, params_from_iter(select_params))
         .await?;
 
     let mut memories = Vec::new();
@@ -261,10 +265,11 @@ pub async fn get_full_batch(
     // Increment access count for all fetched memories in one query.
     let update_sql = format!(
         "UPDATE memories SET access_count = access_count + 1, last_accessed = ? \
-         WHERE id IN ({placeholders})"
+         WHERE id IN ({placeholders}) AND project_id = ?"
     );
     let update_params: Vec<libsql::Value> = std::iter::once(libsql::Value::Text(Utc::now().to_rfc3339()))
         .chain(ids.iter().cloned().map(libsql::Value::Text))
+        .chain(std::iter::once(libsql::Value::Text(project_id.to_string())))
         .collect();
     let _ = conn.execute(&update_sql, params_from_iter(update_params)).await;
 
@@ -272,28 +277,34 @@ pub async fn get_full_batch(
 }
 
 /// Pin or unpin a batch of memories in a single query. Returns the number of rows updated.
-pub async fn pin_batch(conn: &libsql::Connection, ids: &[String], pin: bool) -> Result<u64> {
+pub async fn pin_batch(conn: &libsql::Connection, ids: &[String], project_id: &str, pin: bool) -> Result<u64> {
     if ids.is_empty() {
         return Ok(0);
     }
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     let sql = format!(
-        "UPDATE memories SET pinned = ? WHERE id IN ({placeholders}) AND status != 'deleted'"
+        "UPDATE memories SET pinned = ? WHERE id IN ({placeholders}) AND status != 'deleted' AND project_id = ?"
     );
     let params: Vec<libsql::Value> = std::iter::once(libsql::Value::Integer(if pin { 1 } else { 0 }))
         .chain(ids.iter().cloned().map(libsql::Value::Text))
+        .chain(std::iter::once(libsql::Value::Text(project_id.to_string())))
         .collect();
     Ok(conn.execute(&sql, params_from_iter(params)).await?)
 }
 
 /// Soft-delete a batch of memories in a single query. Returns the number of rows updated.
-pub async fn delete_batch(conn: &libsql::Connection, ids: &[String]) -> Result<u64> {
+pub async fn delete_batch(conn: &libsql::Connection, ids: &[String], project_id: &str) -> Result<u64> {
     if ids.is_empty() {
         return Ok(0);
     }
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-    let sql = format!("UPDATE memories SET status = 'deleted' WHERE id IN ({placeholders})");
-    Ok(conn.execute(&sql, params_from_iter(ids.iter().cloned())).await?)
+    let sql = format!(
+        "UPDATE memories SET status = 'deleted' WHERE id IN ({placeholders}) AND project_id = ?"
+    );
+    let params: Vec<libsql::Value> = ids.iter().cloned().map(libsql::Value::Text)
+        .chain(std::iter::once(libsql::Value::Text(project_id.to_string())))
+        .collect();
+    Ok(conn.execute(&sql, params_from_iter(params)).await?)
 }
 
 /// BM25-only search: no embedding required. Used by inject --type prompt to avoid

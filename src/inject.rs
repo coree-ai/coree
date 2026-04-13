@@ -221,7 +221,7 @@ async fn run_session(
             .collect();
 
         if !full_ids.is_empty() {
-            let full_memories = retrieve::get_full_batch(conn, &full_ids).await?;
+            let full_memories = retrieve::get_full_batch(conn, &full_ids, project_id).await?;
             let full_map: std::collections::HashMap<String, retrieve::FullMemory> =
                 full_memories.into_iter().map(|m| (m.id.clone(), m)).collect();
 

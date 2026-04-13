@@ -351,7 +351,7 @@ impl MemsoServer {
         if input.ids.is_empty() {
             return Ok("No IDs provided.".to_string());
         }
-        let memories = retrieve::get_full_batch(&ready.conn, &input.ids)
+        let memories = retrieve::get_full_batch(&ready.conn, &input.ids, &self.project_id)
             .await
             .map_err(|e| format!("get_memories failed: {e}"))?;
 
@@ -413,7 +413,7 @@ impl MemsoServer {
         }
         let total = input.ids.len();
         let action = if input.pin { "Pinned" } else { "Unpinned" };
-        match retrieve::pin_batch(&ready.conn, &input.ids, input.pin).await {
+        match retrieve::pin_batch(&ready.conn, &input.ids, &self.project_id, input.pin).await {
             Ok(n) if n as usize == total => Ok(format!("{action} {n} memories")),
             Ok(n) => Ok(format!("{action} {n}/{total} memories ({} not found)", total - n as usize)),
             Err(e) => Err(format!("pin_memories failed: {e}")),
@@ -434,7 +434,7 @@ impl MemsoServer {
             return Ok("No IDs provided.".to_string());
         }
         let total = input.ids.len();
-        match retrieve::delete_batch(&ready.conn, &input.ids).await {
+        match retrieve::delete_batch(&ready.conn, &input.ids, &self.project_id).await {
             Ok(n) if n as usize == total => Ok(format!("Deleted {n} memories")),
             Ok(n) => Ok(format!("Deleted {n}/{total} memories ({} not found)", total - n as usize)),
             Err(e) => Err(format!("delete_memories failed: {e}")),
