@@ -1,174 +1,206 @@
 use anyhow::Result;
+use chrono::Utc;
 use libsql::Connection;
+use sha2::{Digest, Sha256};
 
 use crate::embed;
 
+struct Migration {
+    name: &'static str,
+    sql: &'static str,
+}
+
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        name: "v001_initial",
+        sql: include_str!("migrations/v001_initial.sql"),
+    },
+    Migration {
+        name: "v002_embed_model",
+        sql: include_str!("migrations/v002_embed_model.sql"),
+    },
+    Migration {
+        name: "v003_drop_unused",
+        sql: include_str!("migrations/v003_drop_unused.sql"),
+    },
+];
+
 pub async fn run(conn: &Connection) -> Result<()> {
-    // Base schema: all CREATE TABLE/INDEX/TRIGGER statements are idempotent.
-    conn.execute_batch(SCHEMA).await?;
+    // Ensure schema_migrations table exists (idempotent DDL).
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (
+            name       TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL,
+            checksum   TEXT NOT NULL
+        );",
+    )
+    .await?;
 
-    let version = get_version(conn).await?;
+    // Seed schema_migrations from legacy schema_version on first upgrade.
+    seed_from_legacy(conn).await?;
 
-    // v0 -> v1: rename legacy 'agent' source value to 'realtime'.
-    if version < 1 {
-        conn.execute(
-            "UPDATE memories SET source = 'realtime' WHERE source = 'agent'",
-            libsql::params![],
-        )
-        .await?;
-        set_version(conn, 1).await?;
+    // Apply pending migrations.
+    for migration in MIGRATIONS {
+        if is_applied(conn, migration.name).await? {
+            continue;
+        }
+        apply(conn, migration).await?;
     }
 
-    // v1 -> v2: add embed_model column to memory_vectors.
-    // Databases created after this change already have the column (from the base SCHEMA);
-    // the ADD COLUMN is idempotent via error handling.
-    // Note: PRAGMA table_info and LIMIT 0 SELECT probes are unreliable over Hrana (Turso
-    // direct mode) - LIMIT 0 returns Ok even for nonexistent columns. Attempt the DDL
-    // directly and ignore "duplicate column name" (already exists).
-    // Existing rows are backfilled with the current model_id so they are not re-embedded.
-    if version < 2 {
-        if let Err(e) = conn
-            .execute(
-                "ALTER TABLE memory_vectors ADD COLUMN embed_model TEXT NOT NULL DEFAULT ''",
-                libsql::params![],
-            )
-            .await
-        {
-            if !e.to_string().contains("duplicate column name") {
-                return Err(anyhow::anyhow!("v2 migration: {e}"));
-            }
-        }
-        conn.execute(
-            "UPDATE memory_vectors SET embed_model = ?1 WHERE embed_model = ''",
-            libsql::params![embed::model_id()],
-        )
-        .await?;
-        set_version(conn, 2).await?;
-    }
-
-    // v2 -> v3: drop unused sessions table and unused columns (confidence, supersedes).
-    // All three were defined in the schema but never read or written by any code path.
-    //
-    // IMPORTANT: Do NOT use LIMIT 0 SELECT probes here. On Turso/Hrana, a zero-row
-    // SELECT returns Ok even for nonexistent columns (column validation is skipped
-    // when no rows are fetched). Instead, attempt the DDL directly and ignore the
-    // specific "no such column" error (idempotent via error handling, not probing).
-    if version < 3 {
-        conn.execute("DROP TABLE IF EXISTS sessions", libsql::params![])
-            .await?;
-
-        for col in ["confidence", "supersedes"] {
-            let sql = format!("ALTER TABLE memories DROP COLUMN {col}");
-            if let Err(e) = conn.execute(&sql, libsql::params![]).await {
-                if !e.to_string().contains("no such column") {
-                    return Err(anyhow::anyhow!("v3 migration: {e}"));
-                }
-            }
-        }
-
-        set_version(conn, 3).await?;
+    // Validate checksums of all applied migrations (warn only - DB is already in that state).
+    for migration in MIGRATIONS {
+        validate_checksum(conn, migration).await?;
     }
 
     Ok(())
 }
 
-async fn get_version(conn: &Connection) -> Result<i64> {
-    let row = conn
-        .query("SELECT version FROM schema_version LIMIT 1", libsql::params![])
-        .await?
-        .next()
+/// Returns true if the named migration is recorded in schema_migrations.
+async fn is_applied(conn: &Connection, name: &str) -> Result<bool> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM schema_migrations WHERE name = ?1 LIMIT 1",
+            libsql::params![name],
+        )
         .await?;
-    Ok(row.map(|r| r.get::<i64>(0).unwrap_or(0)).unwrap_or(0))
+    Ok(rows.next().await?.is_some())
 }
 
-async fn set_version(conn: &Connection, version: i64) -> Result<()> {
-    conn.execute("DELETE FROM schema_version", libsql::params![]).await?;
+/// Execute a migration's SQL and record it in schema_migrations.
+async fn apply(conn: &Connection, migration: &Migration) -> Result<()> {
+    match migration.name {
+        "v002_embed_model" => apply_v002(conn, migration).await?,
+        "v003_drop_unused" => apply_v003(conn, migration).await?,
+        _ => { conn.execute_batch(migration.sql).await?; }
+    }
+
+    let checksum = sha256(migration.sql);
+    let now = Utc::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO schema_version (version) VALUES (?1)",
-        libsql::params![version],
+        "INSERT INTO schema_migrations (name, applied_at, checksum) VALUES (?1, ?2, ?3)",
+        libsql::params![migration.name, now, checksum],
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// v002: ADD COLUMN with "duplicate column name" idempotency, then backfill.
+async fn apply_v002(conn: &Connection, _migration: &Migration) -> Result<()> {
+    if let Err(e) = conn
+        .execute(
+            "ALTER TABLE memory_vectors ADD COLUMN embed_model TEXT NOT NULL DEFAULT ''",
+            libsql::params![],
+        )
+        .await
+    {
+        if !e.to_string().contains("duplicate column name") {
+            return Err(anyhow::anyhow!("v002 migration: {e}"));
+        }
+    }
+    conn.execute(
+        "UPDATE memory_vectors SET embed_model = ?1 WHERE embed_model = ''",
+        libsql::params![embed::model_id()],
     )
     .await?;
     Ok(())
 }
 
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER NOT NULL
-);
+/// v003: DROP TABLE IF EXISTS is safe; DROP COLUMN with "no such column" idempotency.
+async fn apply_v003(conn: &Connection, _migration: &Migration) -> Result<()> {
+    conn.execute("DROP TABLE IF EXISTS sessions", libsql::params![])
+        .await?;
+    for col in ["confidence", "supersedes"] {
+        let sql = format!("ALTER TABLE memories DROP COLUMN {col}");
+        if let Err(e) = conn.execute(&sql, libsql::params![]).await {
+            if !e.to_string().contains("no such column") {
+                return Err(anyhow::anyhow!("v003 migration: {e}"));
+            }
+        }
+    }
+    Ok(())
+}
 
-CREATE TABLE IF NOT EXISTS memories (
-    id            TEXT PRIMARY KEY,
-    project_id    TEXT NOT NULL,
-    topic_key     TEXT,
-    type          TEXT NOT NULL,
-    title         TEXT NOT NULL,
-    content       TEXT NOT NULL,
-    facts         TEXT,
-    tags          TEXT,
-    importance    REAL    DEFAULT 0.5,
-    access_count  INTEGER DEFAULT 0,
-    last_accessed TEXT,
-    pinned        INTEGER DEFAULT 0,
-    status        TEXT    DEFAULT 'active',
-    session_id    TEXT,
-    source        TEXT    NOT NULL DEFAULT 'realtime',
-    created_at    TEXT    NOT NULL,
-    updated_at    TEXT    NOT NULL,
-    content_hash  TEXT    NOT NULL
-);
+/// Seed schema_migrations from the legacy schema_version table on first upgrade.
+/// If schema_migrations is already populated this is a no-op.
+async fn seed_from_legacy(conn: &Connection) -> Result<()> {
+    // Check if schema_migrations already has entries.
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*) FROM schema_migrations",
+            libsql::params![],
+        )
+        .await?;
+    let count: i64 = rows
+        .next()
+        .await?
+        .map(|r| r.get::<i64>(0).unwrap_or(0))
+        .unwrap_or(0);
+    if count > 0 {
+        return Ok(());
+    }
 
-CREATE UNIQUE INDEX IF NOT EXISTS memories_topic_key
-    ON memories (project_id, topic_key)
-    WHERE topic_key IS NOT NULL;
+    // Read legacy version (0 if table doesn't exist yet).
+    let legacy_version = get_legacy_version(conn).await?;
+    if legacy_version == 0 {
+        return Ok(());
+    }
 
-CREATE INDEX IF NOT EXISTS memories_project_status
-    ON memories (project_id, status);
+    // Mark v001..v00N as applied with a synthetic checksum so the runner skips them.
+    let now = Utc::now().to_rfc3339();
+    for migration in MIGRATIONS.iter().take(legacy_version as usize) {
+        let checksum = sha256(migration.sql);
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (name, applied_at, checksum) VALUES (?1, ?2, ?3)",
+            libsql::params![migration.name, now.as_str(), checksum],
+        )
+        .await?;
+    }
 
-CREATE INDEX IF NOT EXISTS memories_content_hash
-    ON memories (content_hash, session_id);
+    Ok(())
+}
 
-CREATE TABLE IF NOT EXISTS memory_vectors (
-    memory_id   TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-    embed_model TEXT NOT NULL DEFAULT '',
-    embedding   F32_BLOB(384) NOT NULL
-);
+/// Read the legacy schema_version value (0 if table or row is absent).
+async fn get_legacy_version(conn: &Connection) -> Result<i64> {
+    // schema_version may not exist on a fresh DB - handle the error gracefully.
+    match conn
+        .query("SELECT version FROM schema_version LIMIT 1", libsql::params![])
+        .await
+    {
+        Ok(mut rows) => Ok(rows
+            .next()
+            .await?
+            .map(|r| r.get::<i64>(0).unwrap_or(0))
+            .unwrap_or(0)),
+        Err(_) => Ok(0),
+    }
+}
 
-CREATE INDEX IF NOT EXISTS memory_vectors_idx
-    ON memory_vectors (libsql_vector_idx(embedding));
+/// Recompute the checksum of a migration file and log a warning if it differs from stored.
+async fn validate_checksum(conn: &Connection, migration: &Migration) -> Result<()> {
+    let mut rows = conn
+        .query(
+            "SELECT checksum FROM schema_migrations WHERE name = ?1 LIMIT 1",
+            libsql::params![migration.name],
+        )
+        .await?;
+    let stored = match rows.next().await? {
+        Some(row) => row.get::<String>(0)?,
+        None => return Ok(()), // Not yet applied - no checksum to validate.
+    };
+    let current = sha256(migration.sql);
+    if stored != current {
+        eprintln!(
+            "[memso] WARNING: migration '{}' checksum mismatch (stored={}, current={}). \
+             The migration file was modified after it was applied.",
+            migration.name, stored, current
+        );
+    }
+    Ok(())
+}
 
-CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
-    USING fts5(title, content, facts, content=memories, content_rowid=rowid);
-
-CREATE TRIGGER IF NOT EXISTS memories_fts_insert
-    AFTER INSERT ON memories BEGIN
-        INSERT INTO memories_fts(rowid, title, content, facts)
-        VALUES (new.rowid, new.title, new.content, COALESCE(new.facts, ''));
-    END;
-
-CREATE TRIGGER IF NOT EXISTS memories_fts_update
-    AFTER UPDATE ON memories BEGIN
-        INSERT INTO memories_fts(memories_fts, rowid, title, content, facts)
-        VALUES ('delete', old.rowid, old.title, old.content, COALESCE(old.facts, ''));
-        INSERT INTO memories_fts(rowid, title, content, facts)
-        VALUES (new.rowid, new.title, new.content, COALESCE(new.facts, ''));
-    END;
-
-CREATE TRIGGER IF NOT EXISTS memories_fts_delete
-    AFTER DELETE ON memories BEGIN
-        INSERT INTO memories_fts(memories_fts, rowid, title, content, facts)
-        VALUES ('delete', old.rowid, old.title, old.content, COALESCE(old.facts, ''));
-    END;
-
-CREATE TABLE IF NOT EXISTS raw_captures (
-    id           TEXT PRIMARY KEY,
-    project_id   TEXT NOT NULL,
-    captured_at  TEXT NOT NULL,
-    tool_name    TEXT NOT NULL,
-    summary      TEXT NOT NULL,
-    raw_data     TEXT NOT NULL,
-    presented_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS raw_captures_pending
-    ON raw_captures (project_id, presented_at);
-";
+fn sha256(data: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data.as_bytes());
+    hex::encode(hasher.finalize())
+}
