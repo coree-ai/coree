@@ -79,8 +79,24 @@ impl Config {
     ///   MEMSO_BACKEND__AUTH_TOKEN  -> backend.auth_token
     ///   MEMSO_MEMORY__PROJECT_ID   -> memory.project_id
     pub fn load(start_dir: &Path) -> Result<Self> {
-        let project_config = find_project_config(start_dir);
+        let mut project_config = find_project_config(start_dir);
         let global_config = global_config_path().filter(|p| p.exists());
+
+        // Auto-create a minimal .memso.toml when no per-project config exists anywhere
+        // in the ancestor chain. Pinning the project_id on first run prevents memories
+        // from becoming orphaned if the directory is renamed or the git remote changes.
+        // Only fires when find_project_config returns None (no ancestor config at all);
+        // if an ancestor config exists but lacks project_id, inject.rs handles that via
+        // an agent-mediated prompt instead.
+        if project_config.is_none() {
+            let root = find_project_root(start_dir, None);
+            let new_path = root.join(".memso.toml");
+            let pid = crate::project_id::infer(&root);
+            let content = format!("[memory]\nproject_id = \"{pid}\"\n");
+            if std::fs::write(&new_path, &content).is_ok() {
+                project_config = Some(new_path);
+            }
+        }
 
         // Layer: global < project < env vars.
         // Both files are merged so a global Turso backend can be set once and

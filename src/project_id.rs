@@ -14,17 +14,28 @@ pub fn resolve(project_root: &Path, config_value: Option<&str>) -> String {
     if let Some(v) = config_value.filter(|v| !v.is_empty()) {
         return log_and_return(v.to_string(), ".memso.toml / env var");
     }
-
     if let Some(slug) = git_remote_slug(project_root) {
         return log_and_return(slug, "git remote URL");
     }
-
     if let Ok(canonical) = project_root.canonicalize() {
         let path_str = canonical.to_string_lossy().replace('\\', "/");
         return log_and_return(path_str, "canonical path");
     }
-
     log_and_return("unknown".to_string(), "fallback")
+}
+
+/// Infer a project ID from the filesystem without logging.
+/// Same fallback chain as `resolve` but skips the config_value check.
+/// Used by `Config::load` to seed a new `.memso.toml` without producing a
+/// double log line (resolve is called again after load with the written value).
+pub fn infer(project_root: &Path) -> String {
+    if let Some(slug) = git_remote_slug(project_root) {
+        return slug;
+    }
+    if let Ok(canonical) = project_root.canonicalize() {
+        return canonical.to_string_lossy().replace('\\', "/");
+    }
+    "unknown".to_string()
 }
 
 /// Read `.git/config` under `project_root` and return a normalised slug for the
