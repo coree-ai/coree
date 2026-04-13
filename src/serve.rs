@@ -56,7 +56,9 @@ struct MemsoServer {
     session_id: String,
     project_id: String,
     config: Arc<Config>,
+    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
+    #[allow(dead_code)]
     prompt_router: PromptRouter<Self>,
 }
 
