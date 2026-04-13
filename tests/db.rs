@@ -93,7 +93,7 @@ async fn store_and_get_full_roundtrip() {
     assert!(!result.id.is_empty());
     assert!(!result.upserted);
 
-    let mem = retrieve::get_full_batch(&db.conn, &[result.id.clone()]).await.unwrap().into_iter().next().unwrap();
+    let mem = retrieve::get_full_batch(&db.conn, &[result.id.clone()], "test-project").await.unwrap().into_iter().next().unwrap();
     assert_eq!(mem.content, "This is a test memory about Rust");
     assert_eq!(mem.memory_type, "decision");
     assert!((mem.importance - 0.7).abs() < 0.001);
@@ -102,7 +102,7 @@ async fn store_and_get_full_roundtrip() {
 #[tokio::test]
 async fn get_full_batch_returns_empty_for_unknown_ids() {
     let db = migrated_db().await;
-    let results = retrieve::get_full_batch(&db.conn, &["does-not-exist".to_string()]).await.unwrap();
+    let results = retrieve::get_full_batch(&db.conn, &["does-not-exist".to_string()], "test-project").await.unwrap();
     assert!(results.is_empty());
 }
 
@@ -148,7 +148,7 @@ async fn topic_key_upsert_updates_content() {
     assert_eq!(r1.id, r2.id, "upsert should keep the same ID");
     assert!(r2.upserted);
 
-    let mut batch = retrieve::get_full_batch(&db.conn, &[r1.id.clone()]).await.unwrap();
+    let mut batch = retrieve::get_full_batch(&db.conn, &[r1.id.clone()], "test-project").await.unwrap();
     let mem = batch.pop().unwrap();
     assert_eq!(mem.content, "Updated content");
 }
@@ -228,7 +228,7 @@ async fn get_full_batch_returns_all_found() {
     insert_raw(&db, "id-b", "Memory B").await;
 
     let ids = vec!["id-a".to_string(), "id-b".to_string()];
-    let results = retrieve::get_full_batch(&db.conn, &ids).await.unwrap();
+    let results = retrieve::get_full_batch(&db.conn, &ids, "test-project").await.unwrap();
 
     assert_eq!(results.len(), 2);
     let titles: Vec<&str> = results.iter().map(|m| m.title.as_str()).collect();
@@ -242,7 +242,7 @@ async fn get_full_batch_omits_missing_ids() {
     insert_raw(&db, "id-a", "Memory A").await;
 
     let ids = vec!["id-a".to_string(), "nonexistent".to_string()];
-    let results = retrieve::get_full_batch(&db.conn, &ids).await.unwrap();
+    let results = retrieve::get_full_batch(&db.conn, &ids, "test-project").await.unwrap();
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].id, "id-a");
@@ -258,14 +258,14 @@ async fn pin_batch_pins_and_unpins() {
 
     let ids = vec!["id-a".to_string(), "id-b".to_string()];
 
-    let n = retrieve::pin_batch(&db.conn, &ids, true).await.unwrap();
+    let n = retrieve::pin_batch(&db.conn, &ids, "test-project", true).await.unwrap();
     assert_eq!(n, 2);
-    let results = retrieve::get_full_batch(&db.conn, &ids).await.unwrap();
+    let results = retrieve::get_full_batch(&db.conn, &ids, "test-project").await.unwrap();
     assert!(results.iter().all(|m| m.pinned));
 
-    let n = retrieve::pin_batch(&db.conn, &ids, false).await.unwrap();
+    let n = retrieve::pin_batch(&db.conn, &ids, "test-project", false).await.unwrap();
     assert_eq!(n, 2);
-    let results = retrieve::get_full_batch(&db.conn, &ids).await.unwrap();
+    let results = retrieve::get_full_batch(&db.conn, &ids, "test-project").await.unwrap();
     assert!(results.iter().all(|m| !m.pinned));
 }
 
@@ -275,7 +275,7 @@ async fn pin_batch_missing_ids_not_counted() {
     insert_raw(&db, "id-a", "Memory A").await;
 
     let ids = vec!["id-a".to_string(), "nonexistent".to_string()];
-    let n = retrieve::pin_batch(&db.conn, &ids, true).await.unwrap();
+    let n = retrieve::pin_batch(&db.conn, &ids, "test-project", true).await.unwrap();
     assert_eq!(n, 1);
 }
 
@@ -285,9 +285,9 @@ async fn pin_batch_skips_deleted_memories() {
     insert_raw(&db, "id-a", "Memory A").await;
 
     let ids = vec!["id-a".to_string()];
-    retrieve::delete_batch(&db.conn, &ids).await.unwrap();
+    retrieve::delete_batch(&db.conn, &ids, "test-project").await.unwrap();
 
-    let n = retrieve::pin_batch(&db.conn, &ids, true).await.unwrap();
+    let n = retrieve::pin_batch(&db.conn, &ids, "test-project", true).await.unwrap();
     assert_eq!(n, 0);
 }
 
@@ -300,10 +300,10 @@ async fn delete_batch_soft_deletes() {
     insert_raw(&db, "id-b", "Memory B").await;
 
     let ids = vec!["id-a".to_string(), "id-b".to_string()];
-    let n = retrieve::delete_batch(&db.conn, &ids).await.unwrap();
+    let n = retrieve::delete_batch(&db.conn, &ids, "test-project").await.unwrap();
     assert_eq!(n, 2);
 
-    let results = retrieve::get_full_batch(&db.conn, &ids).await.unwrap();
+    let results = retrieve::get_full_batch(&db.conn, &ids, "test-project").await.unwrap();
     assert!(results.iter().all(|m| m.status == "deleted"));
 }
 
@@ -313,6 +313,47 @@ async fn delete_batch_missing_ids_not_counted() {
     insert_raw(&db, "id-a", "Memory A").await;
 
     let ids = vec!["id-a".to_string(), "nonexistent".to_string()];
-    let n = retrieve::delete_batch(&db.conn, &ids).await.unwrap();
+    let n = retrieve::delete_batch(&db.conn, &ids, "test-project").await.unwrap();
     assert_eq!(n, 1);
+}
+
+// --- project_id isolation ---
+
+/// A foreign project must not be able to read memories belonging to another project,
+/// even when it supplies the exact ID.
+#[tokio::test]
+async fn get_full_batch_is_isolated_by_project_id() {
+    let db = migrated_db().await;
+    insert_raw(&db, "id-a", "Memory A").await; // belongs to "test-project"
+
+    let ids = vec!["id-a".to_string()];
+    let results = retrieve::get_full_batch(&db.conn, &ids, "other-project").await.unwrap();
+    assert!(results.is_empty(), "foreign project must not read another project's memory");
+}
+
+/// A foreign project must not be able to pin memories belonging to another project.
+#[tokio::test]
+async fn pin_batch_is_isolated_by_project_id() {
+    let db = migrated_db().await;
+    insert_raw(&db, "id-a", "Memory A").await; // belongs to "test-project"
+
+    let ids = vec!["id-a".to_string()];
+    let n = retrieve::pin_batch(&db.conn, &ids, "other-project", true).await.unwrap();
+    assert_eq!(n, 0, "foreign project must not pin another project's memory");
+}
+
+/// A foreign project must not be able to delete memories belonging to another project.
+#[tokio::test]
+async fn delete_batch_is_isolated_by_project_id() {
+    let db = migrated_db().await;
+    insert_raw(&db, "id-a", "Memory A").await; // belongs to "test-project"
+
+    let ids = vec!["id-a".to_string()];
+    let n = retrieve::delete_batch(&db.conn, &ids, "other-project").await.unwrap();
+    assert_eq!(n, 0, "foreign project must not delete another project's memory");
+
+    // Verify the memory is untouched.
+    let results = retrieve::get_full_batch(&db.conn, &ids, "test-project").await.unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status, "active");
 }
