@@ -4,7 +4,6 @@ use figment::{
     Figment,
 };
 use serde::Deserialize;
-use shellexpand;
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -33,7 +32,6 @@ pub struct BackendConfig {
     pub remote_mode: RemoteMode,
     pub local_path: Option<String>,
     pub remote_url: Option<String>,
-    /// Supports $VAR, ${VAR}, and ${VAR:-default} substitution
     pub auth_token: Option<String>,
 }
 
@@ -94,30 +92,7 @@ impl Config {
 
         let mut cfg: Config = fig.extract().context("Failed to load configuration")?;
         cfg.source_path = config_path;
-        cfg.expand_string_vars();
         Ok(cfg)
-    }
-
-    /// Expand shell-style `$VAR`, `${VAR}`, and `${VAR:-default}` references
-    /// inside string config values. Useful when a value is stored in the config
-    /// file as e.g. `auth_token = "$MY_TOKEN"` to avoid hardcoding secrets.
-    /// Direct env var overrides via `MEMSO_BACKEND__AUTH_TOKEN` are preferred.
-    fn expand_string_vars(&mut self) {
-        self.expand_string_vars_with(|k| env::var(k).ok());
-    }
-
-    fn expand_string_vars_with(&mut self, env_fn: impl Fn(&str) -> Option<String>) {
-        let expand = |s: &str| -> Option<String> {
-            shellexpand::env_with_context(s, |var| env_fn(var).ok_or(()).map(Some))
-                .ok()
-                .map(|cow| cow.into_owned())
-        };
-        if let Some(token) = self.backend.auth_token.clone() {
-            self.backend.auth_token = expand(&token);
-        }
-        if let Some(url) = self.backend.remote_url.clone() {
-            self.backend.remote_url = expand(&url);
-        }
     }
 
     /// Resolved DB path for the current backend mode.
@@ -249,20 +224,4 @@ mod tests {
         assert_eq!(cfg.local_db_path(), PathBuf::from("/some/project/.memso/memory.db"));
     }
 
-    #[test]
-    fn expand_string_vars_substitutes_var() {
-        let env = std::collections::HashMap::from([("_MEMSO_TEST_TOKEN", "supersecret")]);
-        let mut cfg = Config::default();
-        cfg.backend.auth_token = Some("${_MEMSO_TEST_TOKEN}".to_string());
-        cfg.expand_string_vars_with(|k| env.get(k).map(|s| s.to_string()));
-        assert_eq!(cfg.backend.auth_token, Some("supersecret".to_string()));
-    }
-
-    #[test]
-    fn expand_string_vars_missing_var_becomes_none() {
-        let mut cfg = Config::default();
-        cfg.backend.auth_token = Some("${_MEMSO_NONEXISTENT_VAR}".to_string());
-        cfg.expand_string_vars_with(|_| None);
-        assert_eq!(cfg.backend.auth_token, None);
-    }
 }
