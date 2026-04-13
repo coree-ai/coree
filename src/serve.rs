@@ -571,6 +571,14 @@ async fn reembed_stale(conn: Arc<libsql::Connection>, embedder: Arc<Mutex<Embedd
 }
 
 pub async fn run(config: Config) -> Result<()> {
+    // If no project_id is configured, run in inert mode: MCP server starts so the
+    // agent can respond to tool calls, but no DB is opened, no embedder loaded, and
+    // no .memso directory is created. All tool calls return a helpful "no config"
+    // message that the AI can surface to the user.
+    if config.memory.project_id.is_none() {
+        return serve_no_config(config).await;
+    }
+
     // Init file logger first — all subsequent mlog! calls mirror to this file.
     // Location: .memso/memso-serve.log next to crash.log and the database.
     let log_path = config.db_path()
@@ -622,6 +630,49 @@ pub async fn run(config: Config) -> Result<()> {
     }
     mlog!("=== memso serve exiting ===");
     result
+}
+
+/// Start the MCP server in inert mode when no `.memso.toml` with a `project_id`
+/// is found. The server is fully reachable so the AI can call tools, but every
+/// tool call returns a "no config" message with setup instructions. No database
+/// is opened, no embedder loaded, and no `.memso/` directory is created.
+async fn serve_no_config(config: Config) -> Result<()> {
+    let suggested = project_id::infer(&config.project_root);
+    let no_config_msg = format!(
+        "memso has loaded, but there is no `.memso.toml` configuration file for this \
+         project, so memories will not be stored or retrieved this session.\n\
+         If you would like to enable memories, please ask me to create a `.memso.toml` \
+         file. Suggested configuration based on this project:\n\n\
+         ```toml\n\
+         [memory]\n\
+         project_id = \"{suggested}\"\n\
+         ```"
+    );
+    eprintln!("memso: running in inert mode (no .memso.toml with project_id found)");
+
+    // Put the server immediately into a permanent Failed state. Every tool call
+    // will return the no-config message via try_ready(). The watch sender is kept
+    // alive for the duration so the state never changes.
+    let (_db_tx, db_rx) = tokio::sync::watch::channel(DbState::Failed(no_config_msg));
+
+    let server = MemsoServer {
+        db: db_rx,
+        write_lock: store::new_write_lock(),
+        session_id: Uuid::new_v4().to_string(),
+        project_id: suggested,
+        config: Arc::new(config),
+        tool_router: MemsoServer::tool_router(),
+        prompt_router: MemsoServer::prompt_router(),
+    };
+
+    let service = server.serve(stdio()).await?;
+
+    // Wait for client disconnect or shutdown. Deliberately no wait_db_failed arm:
+    // the Failed state here is permanent and intentional, not an error condition.
+    tokio::select! {
+        result = service.waiting() => result.map(|_| ()).map_err(Into::into),
+        _ = shutdown_signal() => Ok(()),
+    }
 }
 
 async fn serve_inner(config: Config, project_id: String) -> Result<()> {
