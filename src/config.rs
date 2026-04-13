@@ -4,7 +4,6 @@ use figment::{
     Figment,
 };
 use serde::Deserialize;
-use std::env;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
@@ -56,9 +55,14 @@ pub struct Config {
     pub backend: BackendConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
-    /// Path this config was loaded from, if any
+    /// Path the project config (`.memso.toml`) was loaded from, if any.
+    /// Used only for `toml_edit` writes -- not for path derivation.
     #[serde(skip)]
     pub source_path: Option<PathBuf>,
+    /// Root directory of the project. All `.memso/` paths are derived from this.
+    /// Determined at load time: `.memso.toml` parent -> nearest `.git/` ancestor -> CWD.
+    #[serde(skip)]
+    pub project_root: PathBuf,
 }
 
 impl Config {
@@ -75,11 +79,17 @@ impl Config {
     ///   MEMSO_BACKEND__AUTH_TOKEN  -> backend.auth_token
     ///   MEMSO_MEMORY__PROJECT_ID   -> memory.project_id
     pub fn load(start_dir: &Path) -> Result<Self> {
-        let config_path = find_project_config(start_dir)
-            .or_else(|| global_config_path().filter(|p| p.exists()));
+        let project_config = find_project_config(start_dir);
+        let global_config = global_config_path().filter(|p| p.exists());
 
+        // Layer: global < project < env vars.
+        // Both files are merged so a global Turso backend can be set once and
+        // individual projects only need to override [memory].project_id.
         let mut fig = Figment::new();
-        if let Some(ref path) = config_path {
+        if let Some(ref path) = global_config {
+            fig = fig.merge(Toml::file(path));
+        }
+        if let Some(ref path) = project_config {
             fig = fig.merge(Toml::file(path));
         }
         // Double underscore is the figment-idiomatic level separator.
@@ -88,7 +98,8 @@ impl Config {
         fig = fig.merge(Env::prefixed("MEMSO_").split("__"));
 
         let mut cfg: Config = fig.extract().context("Failed to load configuration")?;
-        cfg.source_path = config_path;
+        cfg.source_path = project_config;
+        cfg.project_root = find_project_root(start_dir, cfg.source_path.as_deref());
         Ok(cfg)
     }
 
@@ -100,12 +111,6 @@ impl Config {
     /// the other mode's data, and the local file serves as a natural backup after
     /// `memso remote enable` without any explicit rename step.
     pub fn db_path(&self) -> PathBuf {
-        let base = self
-            .source_path
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let filename = match self.backend.mode {
             BackendMode::Local => "memory.db",
             BackendMode::Remote => match self.backend.remote_mode {
@@ -115,7 +120,7 @@ impl Config {
                 RemoteMode::Direct => "memory.remote.db",
             },
         };
-        base.join(".memso").join(filename)
+        self.project_root.join(".memso").join(filename)
     }
 
     /// Path to the lock file held exclusively by `memso serve` for its entire lifetime.
@@ -142,13 +147,7 @@ impl Config {
     /// the current backend mode. Used by `remote enable` and `remote sync` as the
     /// source/seed database - it is the natural backup after switching to replica mode.
     pub fn local_db_path(&self) -> PathBuf {
-        let base = self
-            .source_path
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        base.join(".memso").join("memory.db")
+        self.project_root.join(".memso").join("memory.db")
     }
 }
 
@@ -165,6 +164,28 @@ fn find_project_config(start: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Determine the project root directory for anchoring `.memso/` files.
+///
+/// Walk-up chain:
+/// 1. Parent of the project `.memso.toml` (if found)
+/// 2. Nearest ancestor directory containing `.git/`
+/// 3. `start_dir` as final fallback (handles global-config-only and no-git cases)
+fn find_project_root(start_dir: &Path, project_config: Option<&Path>) -> PathBuf {
+    if let Some(parent) = project_config.and_then(|p| p.parent()) {
+        return parent.to_path_buf();
+    }
+    let mut dir = start_dir.to_path_buf();
+    loop {
+        if dir.join(".git").exists() {
+            return dir;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    start_dir.to_path_buf()
+}
+
 fn global_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("memso").join("config.toml"))
 }
@@ -177,7 +198,7 @@ mod tests {
     #[test]
     fn db_path_local_mode() {
         let mut cfg = Config::default();
-        cfg.source_path = Some(PathBuf::from("/some/project/.memso.toml"));
+        cfg.project_root = PathBuf::from("/some/project");
         assert_eq!(cfg.db_path(), PathBuf::from("/some/project/.memso/memory.db"));
     }
 
@@ -186,7 +207,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.backend.mode = BackendMode::Remote;
         cfg.backend.remote_mode = RemoteMode::Direct;
-        cfg.source_path = Some(PathBuf::from("/some/project/.memso.toml"));
+        cfg.project_root = PathBuf::from("/some/project");
         assert_eq!(cfg.db_path(), PathBuf::from("/some/project/.memso/memory.remote.db"));
     }
 
@@ -195,7 +216,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.backend.mode = BackendMode::Remote;
         cfg.backend.remote_mode = RemoteMode::Replica;
-        cfg.source_path = Some(PathBuf::from("/some/project/.memso.toml"));
+        cfg.project_root = PathBuf::from("/some/project");
         assert_eq!(cfg.db_path(), PathBuf::from("/some/project/.memso/memory.replica.db"));
     }
 
@@ -204,8 +225,24 @@ mod tests {
         let mut cfg = Config::default();
         cfg.backend.mode = BackendMode::Remote;
         cfg.backend.remote_mode = RemoteMode::Replica;
-        cfg.source_path = Some(PathBuf::from("/some/project/.memso.toml"));
+        cfg.project_root = PathBuf::from("/some/project");
         assert_eq!(cfg.local_db_path(), PathBuf::from("/some/project/.memso/memory.db"));
+    }
+
+    #[test]
+    fn find_project_root_uses_project_config_parent() {
+        let root = find_project_root(
+            Path::new("/some/subdir"),
+            Some(Path::new("/some/project/.memso.toml")),
+        );
+        assert_eq!(root, PathBuf::from("/some/project"));
+    }
+
+    #[test]
+    fn find_project_root_falls_back_to_start_dir() {
+        // No project config, no .git ancestor reachable from a temp path
+        let root = find_project_root(Path::new("/tmp/norepo"), None);
+        assert_eq!(root, PathBuf::from("/tmp/norepo"));
     }
 
 }
