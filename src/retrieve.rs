@@ -217,21 +217,6 @@ pub async fn search(
     scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);
 
-    // Increment access counts for all returned results in a single query.
-    if !scored.is_empty() {
-        let ids: Vec<String> = scored.iter().map(|r| r.id.clone()).collect();
-        let update_placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let update_sql = format!(
-            "UPDATE memories SET access_count = access_count + 1, last_accessed = ? \
-             WHERE id IN ({update_placeholders})"
-        );
-        let update_params: Vec<libsql::Value> =
-            std::iter::once(libsql::Value::Text(now.to_rfc3339()))
-                .chain(ids.into_iter().map(libsql::Value::Text))
-                .collect();
-        let _ = conn.execute(&update_sql, params_from_iter(update_params)).await;
-    }
-
     Ok(scored)
 }
 
@@ -359,21 +344,6 @@ pub async fn search_bm25(
             facts_json,
             tags_json,
         });
-    }
-
-    // Increment access counts for all returned results in a single query.
-    if !results.is_empty() {
-        let ids: Vec<String> = results.iter().map(|r| r.id.clone()).collect();
-        let update_placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let update_sql = format!(
-            "UPDATE memories SET access_count = access_count + 1, last_accessed = ? \
-             WHERE id IN ({update_placeholders})"
-        );
-        let update_params: Vec<libsql::Value> =
-            std::iter::once(libsql::Value::Text(now.to_rfc3339()))
-                .chain(ids.into_iter().map(libsql::Value::Text))
-                .collect();
-        let _ = conn.execute(&update_sql, params_from_iter(update_params)).await;
     }
 
     Ok(results)
