@@ -91,6 +91,29 @@ async fn run_inner(
     let cwd = env::current_dir()?;
     let config = Config::load(&cwd)?;
 
+    // If project_id is still unresolved after full config load (ancestor config exists
+    // but lacks project_id), prompt the AI to surface this to the user.
+    // Only on session/compact types to avoid noise on every prompt.
+    if config.memory.project_id.is_none() && (inject_type == "session" || inject_type == "compact") {
+        let suggested = crate::project_id::infer(&config.project_root);
+        let config_path = config.source_path
+            .as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| ".memso.toml".to_string());
+        println!(
+            "[memso] ACTION REQUIRED: No `memory.project_id` is set in `{config_path}`. \
+             Without this, memories may be loaded under a different ID if the project \
+             directory is renamed or the git remote changes, which will cause sessions \
+             to lose access to existing memories.\n\
+             Inform the user of this and offer to add it. Suggested value based on this \
+             project:\n\n\
+             ```toml\n\
+             [memory]\n\
+             project_id = \"{suggested}\"\n\
+             ```\n"
+        );
+    }
+
     // Check for a crash log written by a previous `memso serve` session.
     // Output to stdout so it lands in additionalContext before any memory content.
     let crash_log_path = config.db_path()
