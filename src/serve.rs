@@ -337,9 +337,9 @@ impl MemsoServer {
                 if results.is_empty() {
                     "No memories found.".to_string()
                 } else if summary {
-                    format_summary(&results)
+                    crate::format::summary(&results)
                 } else {
-                    format_compact(&results)
+                    crate::format::compact(&results, 0, None)
                 }
             })
             .map_err(|e| format!("search_memory failed: {e}"))
@@ -381,9 +381,9 @@ impl MemsoServer {
                 if results.is_empty() {
                     "No memories found.".to_string()
                 } else if summary {
-                    format_summary(&results)
+                    crate::format::summary(&results)
                 } else {
-                    format_compact(&results)
+                    crate::format::compact(&results, 0, None)
                 }
             })
             .map_err(|e| format!("list_memories failed: {e}"))
@@ -717,44 +717,6 @@ async fn shutdown_signal() {
         _ = ctrl_c => {}
         _ = terminate => {}
     }
-}
-
-fn format_compact(results: &[retrieve::CompactResult]) -> String {
-    let mut out = format!("--- Memory Context ({} results) ---\n", results.len());
-    for r in results {
-        let date = r.created_at.get(..10).unwrap_or(&r.created_at);
-        out.push_str(&format!("[{:<18} {:.2}] {}  {}  ~{}c  {}\n", r.memory_type, r.importance, r.id, date, r.content_len, r.title));
-    }
-    out.push_str("---\n");
-    out
-}
-
-fn format_summary(results: &[retrieve::CompactResult]) -> String {
-    let mut out = format!("--- Memory Context ({} results) ---\n", results.len());
-    for r in results {
-        let date = r.created_at.get(..10).unwrap_or(&r.created_at);
-        out.push_str(&format!(
-            "[{:<18} {:.2}] {}  {}  ~{}c  {}\n",
-            r.memory_type, r.importance, r.id, date, r.content_len, r.title
-        ));
-        let facts: Vec<String> = r.facts_json.as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_default();
-        for fact in &facts {
-            out.push_str(&format!("  - {fact}\n"));
-        }
-        let tags: Vec<String> = r.tags_json.as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_default();
-        if !tags.is_empty() {
-            out.push_str(&format!("  tags: {}\n", tags.join(", ")));
-        }
-        if !facts.is_empty() || !tags.is_empty() {
-            out.push('\n');
-        }
-    }
-    out.push_str("---\n");
-    out
 }
 
 fn format_full_memory(m: &retrieve::FullMemory) -> String {

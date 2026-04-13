@@ -1,6 +1,7 @@
 pub mod config;
 pub mod db;
 pub mod embed;
+pub mod format;
 pub mod inject;
 pub mod install;
 pub mod remote;

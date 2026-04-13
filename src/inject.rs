@@ -147,7 +147,7 @@ async fn run_prompt(
     if !query.is_empty() {
         let results = retrieve::search_bm25(conn, query, project_id, limit).await?;
         if !results.is_empty() {
-            output.push_str(&format_compact(&results, 0, None));
+            output.push_str(&crate::format::compact(&results, 0, None));
         }
     }
     print_within_budget(&output, budget);
@@ -253,7 +253,7 @@ async fn run_session(
     let mut output = INSTRUCTIONS.to_string();
     output.push_str(&build_session_instructions(session_path.as_deref()));
     if !results.is_empty() {
-        output.push_str(&format_compact(
+        output.push_str(&crate::format::compact(
             &results[included_in_file..],
             included_in_file,
             session_path.as_deref(),
@@ -424,35 +424,6 @@ fn format_full_memory(mem: &retrieve::FullMemory) -> String {
         if !parsed.is_empty() {
             out.push_str(&format!("facts: {}\n", parsed.join("; ")));
         }
-    }
-    out.push_str("---\n");
-    out
-}
-
-fn format_compact(
-    results: &[retrieve::CompactResult],
-    omitted: usize,
-    omitted_file: Option<&std::path::Path>,
-) -> String {
-    let total = results.len() + omitted;
-    let mut header = format!("--- Memory Context ({} results", total);
-    if omitted > 0
-        && let Some(path) = omitted_file
-    {
-        header.push_str(&format!(
-            " — {} included in full in {}",
-            omitted,
-            path.display()
-        ));
-    }
-    header.push_str(") ---\n");
-    let mut out = header;
-    for r in results {
-        let date = r.created_at.get(..10).unwrap_or(&r.created_at);
-        out.push_str(&format!(
-            "[{:<18} {:.2}] {}  {}  ~{}c  {}\n",
-            r.memory_type, r.importance, r.id, date, r.content_len, r.title
-        ));
     }
     out.push_str("---\n");
     out
