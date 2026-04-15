@@ -19,7 +19,7 @@
 #   The binary is re-downloaded only when the remote SHA changes.
 set -uo pipefail
 
-MEMSO_VERSION="0.3.2"
+MEMSO_VERSION="0.4.0"
 PLUGIN_VERSION="1"
 COMPOSITE="${MEMSO_VERSION}-${PLUGIN_VERSION}"
 
