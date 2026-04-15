@@ -437,6 +437,44 @@ fn format_session_file(captures: &[PendingCapture], memories_content: &str) -> S
     out
 }
 
+/// Format session content for the `session_context` MCP tool return value.
+/// Unlike `format_session_file` (which is injected at operator/system-prompt level),
+/// tool results are processed as external data. Commanding language ("MANDATORY PROCESS",
+/// "VIOLATION IF SKIPPED") in tool results reads as prompt injection to model safety
+/// training. This function presents the same data in a neutral, informational format.
+fn format_tool_session_content(captures: &[PendingCapture], memories_content: &str) -> String {
+    let mut out = String::new();
+
+    // Section 1: Raw captures
+    out.push_str("=== PENDING CAPTURES FROM LAST SESSION ===\n");
+    if captures.is_empty() {
+        out.push_str("No raw captures to process from last session.\n");
+    } else {
+        out.push_str(&format!(
+            "{} captures from previous session activity.\n\
+             Review and store memories for non-obvious discoveries \
+             (source='reviewed'). Routine edits with no finding need no memory.\n\n\
+             --- Captures ---\n",
+            captures.len()
+        ));
+        for c in captures {
+            let date = c.captured_at.get(..10).unwrap_or(&c.captured_at);
+            out.push_str(&format!("[{:<12}] {}  {}\n", c.tool_name, date, c.summary));
+        }
+        out.push_str("---\n");
+    }
+
+    // Section 2: Prior memories
+    out.push_str("\n=== PRIOR MEMORIES ===\n");
+    if memories_content.is_empty() {
+        out.push_str("No prior memories for this project.\n");
+    } else {
+        out.push_str(memories_content);
+    }
+
+    out
+}
+
 /// Resolve the query for prompt injection.
 /// Precedence: --query flag > $CLAUDE_USER_PROMPT env > stdin JSON {"prompt":"..."} > stdin raw
 fn resolve_prompt_query(query_override: Option<String>) -> String {
@@ -538,7 +576,7 @@ pub async fn build_tool_session_content(
         mark_captures_presented(conn, project_id).await?;
     }
 
-    let mut out = format_session_file(&captures, &memories_content);
+    let mut out = format_tool_session_content(&captures, &memories_content);
     // Append compact index for memories that didn't fit in the full-content budget.
     if included < results.len() {
         out.push_str(&crate::format::compact(&results[included..], included, None));
