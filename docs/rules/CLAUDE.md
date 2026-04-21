@@ -39,3 +39,15 @@ code, or anything already documented in CLAUDE.md.
   - 0.3  for supplementary facts
 - facts: array of short discrete statements, e.g.
   ["Uses tower-sessions-sqlx-store 0.15.0", "PostgresStore auto-migrates on startup"]
+
+## Code Intelligence
+
+You also have four code intelligence tools that search the indexed source code:
+
+- search(query) - unified search across memories AND code simultaneously. Use this by default.
+- search_code(query) - code-only search when memory results would add noise.
+- get_symbol(name, file_path?) - look up a specific function, struct, class, or method.
+- list_hotspots(min_churn?, limit?) - most-changed symbols; use before touching volatile areas.
+
+search() degrades gracefully to memory-only if the index is not yet ready.
+The index builds in the background on startup; tools return empty code results during the first build.

@@ -12,3 +12,12 @@ Types: decision | gotcha | problem-solution | how-it-works | what-changed |
        trade-off | preference | discovery | workflow | fact
 
 Use topic_key to update existing memories rather than creating duplicates.
+
+# Code Intelligence
+
+You also have code search tools:
+
+- search(query) - unified search across memories AND code. Use this by default.
+- search_code(query) - code-only search without memory results.
+- get_symbol(name) - look up a specific function, struct, class, or method.
+- list_hotspots() - most-changed symbols by commit churn.
