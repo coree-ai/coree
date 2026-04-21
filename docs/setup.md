@@ -79,7 +79,10 @@ tyto automatically indexes your source code on startup, giving agents four addit
 - `list_hotspots` — list the most frequently-changed symbols (commit churn)
 
 Indexing runs in the background after startup. Tools return empty results during the first
-index build and populate as files are processed.
+index build and populate as files are processed. After the initial build completes, tyto
+watches for file changes and git commits and updates the index automatically — no restart
+required. If multiple `tyto serve` processes are running for the same project, one acts
+as the watcher leader and the others serve queries from the shared index.
 
 The index database is stored outside the project directory at:
 - Linux: `~/.local/share/tyto/managed/-home-user-myproject/index.db`
