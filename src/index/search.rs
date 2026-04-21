@@ -282,16 +282,14 @@ pub fn format_result(r: &CodeResult, verbose: bool) -> String {
     if let Some(ref sig) = r.signature {
         out.push_str(&format!("Signature: {sig}\n"));
     }
-    if verbose {
-        if let Some(ref doc) = r.doc_comment {
-            let first = doc.lines().next().unwrap_or("").trim();
-            if !first.is_empty() {
-                let cleaned = first
-                    .trim_start_matches("///")
-                    .trim_start_matches("//!")
-                    .trim();
-                out.push_str(&format!("Doc: {cleaned}\n"));
-            }
+    if verbose && let Some(ref doc) = r.doc_comment {
+        let first = doc.lines().next().unwrap_or("").trim();
+        if !first.is_empty() {
+            let cleaned = first
+                .trim_start_matches("///")
+                .trim_start_matches("//!")
+                .trim();
+            out.push_str(&format!("Doc: {cleaned}\n"));
         }
     }
     if r.churn_count > 0 {

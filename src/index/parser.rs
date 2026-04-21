@@ -98,10 +98,9 @@ pub fn parse_file(source: &str, _file_path: &str, lang: &Lang) -> Vec<Chunk> {
         for cap in m.captures {
             if cap.index == symbol_idx {
                 symbol_node = Some(cap.node);
-            } else if cap.index == name_idx {
-                if let Ok(t) = cap.node.utf8_text(source_bytes) {
-                    name_text = t.to_string();
-                }
+            } else if cap.index == name_idx
+                && let Ok(t) = cap.node.utf8_text(source_bytes) {
+                name_text = t.to_string();
             }
         }
 
@@ -166,14 +165,11 @@ fn qualified_name_for(node: tree_sitter::Node<'_>, name: &str, source: &[u8]) ->
             "impl_item" | "trait_item" => {
                 // Find the type/name child
                 for i in 0..parent.child_count() {
-                    if let Some(child) = parent.child(i) {
-                        if matches!(child.kind(), "type_identifier" | "generic_type" | "scoped_type_identifier") {
-                            if let Ok(type_name) = child.utf8_text(source) {
-                                // Strip generic params for readability: "Vec<T>" -> "Vec"
-                                let base = type_name.split('<').next().unwrap_or(type_name);
-                                return format!("{base}::{name}");
-                            }
-                        }
+                    if let Some(child) = parent.child(i)
+                        && matches!(child.kind(), "type_identifier" | "generic_type" | "scoped_type_identifier")
+                        && let Ok(type_name) = child.utf8_text(source) {
+                        let base = type_name.split('<').next().unwrap_or(type_name);
+                        return format!("{base}::{name}");
                     }
                 }
                 return name.to_string();
@@ -182,12 +178,10 @@ fn qualified_name_for(node: tree_sitter::Node<'_>, name: &str, source: &[u8]) ->
                 // Python: method inside class
                 if parent.kind() == "class_definition" {
                     for i in 0..parent.child_count() {
-                        if let Some(child) = parent.child(i) {
-                            if child.kind() == "identifier" {
-                                if let Ok(class_name) = child.utf8_text(source) {
-                                    return format!("{class_name}.{name}");
-                                }
-                            }
+                        if let Some(child) = parent.child(i)
+                            && child.kind() == "identifier"
+                            && let Ok(class_name) = child.utf8_text(source) {
+                            return format!("{class_name}.{name}");
                         }
                     }
                 }
@@ -229,7 +223,7 @@ fn extract_signature(node: tree_sitter::Node<'_>, source: &[u8], lang: &Lang) ->
         .trim()
         .to_string();
     // Trim trailing whitespace and trailing brace/colon artifacts
-    let sig = sig.trim_end_matches(|c| c == '{' || c == ':' || c == ' ').to_string();
+    let sig = sig.trim_end_matches(['{', ':', ' ']).to_string();
     if sig.is_empty() { None } else { Some(sig) }
 }
 
@@ -257,23 +251,18 @@ fn extract_doc_comment(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<Str
         let body_node = (0..node.child_count())
             .filter_map(|i| node.child(i))
             .find(|c| c.kind() == "block");
-        if let Some(body) = body_node {
-            if let Some(first) = body.named_child(0) {
-                if first.kind() == "expression_statement" {
-                    if let Some(str_node) = first.named_child(0) {
-                        if str_node.kind() == "string" {
-                            if let Ok(text) = str_node.utf8_text(source) {
-                                let cleaned = text
-                                    .trim_matches(|c| c == '"' || c == '\'' || c == '\n')
-                                    .trim()
-                                    .to_string();
-                                if !cleaned.is_empty() {
-                                    return Some(cleaned);
-                                }
-                            }
-                        }
-                    }
-                }
+        if let Some(body) = body_node
+            && let Some(first) = body.named_child(0)
+            && first.kind() == "expression_statement"
+            && let Some(str_node) = first.named_child(0)
+            && str_node.kind() == "string"
+            && let Ok(text) = str_node.utf8_text(source) {
+            let cleaned = text
+                .trim_matches(|c| c == '"' || c == '\'' || c == '\n')
+                .trim()
+                .to_string();
+            if !cleaned.is_empty() {
+                return Some(cleaned);
             }
         }
     }
