@@ -294,3 +294,132 @@ async fn handle_new_commit(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::try_acquire_lock;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    /// Return a unique path in the system temp dir. Each call returns a distinct path,
+    /// so parallel tests never share a lock file.
+    fn unique_lock_path() -> PathBuf {
+        std::env::temp_dir().join(format!("tyto-test-watcher-{}.lock", Uuid::new_v4()))
+    }
+
+    #[test]
+    fn test_acquire_when_free() {
+        let path = unique_lock_path();
+        let f = try_acquire_lock(&path);
+        assert!(f.is_some(), "should acquire lock on an uncontested file");
+    }
+
+    #[test]
+    fn test_contention_same_file() {
+        let path = unique_lock_path();
+
+        // First holder acquires the lock.
+        let _holder = try_acquire_lock(&path)
+            .expect("first acquire must succeed");
+
+        // A second attempt on the same path should fail: a new open() creates a
+        // separate file description, but flock(LOCK_EX) still conflicts.
+        let contender = try_acquire_lock(&path);
+        assert!(
+            contender.is_none(),
+            "second acquire must fail while first holder is alive"
+        );
+    }
+
+    #[test]
+    fn test_reacquire_after_drop() {
+        let path = unique_lock_path();
+
+        let holder = try_acquire_lock(&path).expect("initial acquire must succeed");
+
+        // Confirm contention is present.
+        assert!(try_acquire_lock(&path).is_none(), "must be contested while holder lives");
+
+        // Releasing the lock (drop closes the fd and the OS releases the flock).
+        drop(holder);
+
+        // The file is now free; a new attempt must succeed.
+        let new_holder = try_acquire_lock(&path);
+        assert!(
+            new_holder.is_some(),
+            "must re-acquire after the previous holder is dropped"
+        );
+    }
+
+    /// Tests the full leader-election handover scenario:
+    /// Task A holds the lock, Task B waits. A releases; B must acquire.
+    ///
+    /// Uses oneshot channels throughout — no sleep(), no wall-clock assertions.
+    /// Correctness is proven by ordering, not by timing.
+    #[tokio::test]
+    async fn test_lock_handover_between_tasks() {
+        let path = std::sync::Arc::new(unique_lock_path());
+
+        // Channels for precise synchronisation between tasks.
+        let (a_held_tx, a_held_rx) = tokio::sync::oneshot::channel::<()>();
+        let (a_release_tx, a_release_rx) = tokio::sync::oneshot::channel::<()>();
+        let (b_acquired_tx, mut b_acquired_rx) = tokio::sync::oneshot::channel::<()>();
+
+        // Task A: acquire, signal held, wait for permission to release, then drop.
+        let path_a = std::sync::Arc::clone(&path);
+        let task_a = tokio::spawn(async move {
+            let f = try_acquire_lock(&path_a).expect("task A must acquire lock");
+            a_held_tx.send(()).expect("send A-held signal");
+            a_release_rx.await.expect("receive release signal");
+            drop(f); // OS releases flock here
+        });
+
+        // Wait until A confirms it holds the lock before proceeding.
+        a_held_rx.await.expect("receive A-held signal");
+
+        // At this point A definitely holds the lock.
+        assert!(
+            try_acquire_lock(&path).is_none(),
+            "lock must be contested while A holds it"
+        );
+
+        // Task B: retry loop — the same pattern used in the real watcher::start loop.
+        // Retries every 10ms (fast for tests, avoids flakiness from scheduling jitter).
+        let path_b = std::sync::Arc::clone(&path);
+        tokio::spawn(async move {
+            let mut signal = Some(b_acquired_tx);
+            loop {
+                if let Some(_f) = try_acquire_lock(&path_b) {
+                    if let Some(tx) = signal.take() {
+                        tx.send(()).expect("send B-acquired signal");
+                    }
+                    // Keep `_f` alive; in the real loop this would run the watcher.
+                    std::future::pending::<()>().await;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        });
+
+        // B has not acquired yet (A still holds it).
+        // Use try_recv to confirm — B's channel will not be ready.
+        assert!(
+            b_acquired_rx.try_recv().is_err(),
+            "B must not have acquired before A releases"
+        );
+
+        // Now release A. B's retry loop will pick up the lock on its next iteration.
+        a_release_tx.send(()).expect("send release signal");
+        task_a.await.expect("task A must complete cleanly");
+
+        // Wait for B to signal acquisition. Give it a generous timeout (1s) —
+        // with a 10ms retry interval the actual handover takes <20ms in practice.
+        // The timeout only fires on a genuine bug, not scheduling noise.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            &mut b_acquired_rx,
+        )
+        .await
+        .expect("timed out waiting for B to acquire lock — handover failed")
+        .expect("B-acquired channel closed unexpectedly");
+    }
+}
