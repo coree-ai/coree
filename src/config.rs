@@ -177,6 +177,14 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("serve.lock"))
     }
 
+    /// Path to the lock file used for file-watcher leader election across processes.
+    pub fn index_watcher_lock_path(&self) -> PathBuf {
+        self.index_db_path()
+            .parent()
+            .map(|p| p.join("index.watcher.lock"))
+            .unwrap_or_else(|| PathBuf::from("index.watcher.lock"))
+    }
+
     /// Path to the ready file written by `tyto serve` once the DB and embedder are loaded.
     pub fn serve_ready_path(&self) -> PathBuf {
         self.db_path()

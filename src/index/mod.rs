@@ -3,6 +3,7 @@ pub mod indexer;
 pub mod parser;
 pub mod schema;
 pub mod search;
+pub mod watcher;
 
 use anyhow::Result;
 use libsql::Builder;

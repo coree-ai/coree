@@ -948,13 +948,22 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
                                 mlog!("tyto: code index ready, starting background indexing...");
                                 let conn = Arc::clone(&idx_ready.conn);
                                 let emb = Arc::clone(&embedder_for_idx);
-                                match index::indexer::run(project_root, conn, emb, git_history, extra_excludes).await {
+                                match index::indexer::run(project_root.clone(), conn.clone(), emb.clone(), git_history, extra_excludes.clone()).await {
                                     Ok(r) => mlog!(
                                         "tyto: code index complete — {} files, {} chunks",
                                         r.files_indexed, r.chunks_stored
                                     ),
                                     Err(e) => mlog!("tyto: code index run failed: {e:#}"),
                                 }
+                                let watcher_lock = config_for_idx.index_watcher_lock_path();
+                                index::watcher::start(
+                                    watcher_lock,
+                                    project_root,
+                                    conn,
+                                    emb,
+                                    git_history,
+                                    extra_excludes,
+                                );
                             }
                             Err(e) => {
                                 mlog!("tyto: code index open failed: {e:#}");

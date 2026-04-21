@@ -72,6 +72,9 @@ tree-sitter-python = "0.23"
 # Code intelligence: gitignore-aware file walking
 ignore = "0.4"
 
+# Code intelligence: live file watching for incremental reindex
+notify = { version = "7", features = ["macos_fsevent"] }
+
 [profile.release]
 strip = true
 opt-level = "z"

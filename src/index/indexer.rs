@@ -17,7 +17,7 @@ const ALWAYS_EXCLUDE: &[&str] = &[
     "__pycache__", ".venv", "vendor", ".mypy_cache",
 ];
 
-fn is_excluded(path: &Path) -> bool {
+pub(crate) fn is_excluded(path: &Path) -> bool {
     for component in path.components() {
         let name = component.as_os_str().to_string_lossy();
         if ALWAYS_EXCLUDE.iter().any(|e| name == *e) {
@@ -147,8 +147,19 @@ fn collect_files(root: &Path, extra_excludes: &[String]) -> Result<Vec<(PathBuf,
     Ok(files)
 }
 
+/// Remove all index data for a deleted file.
+pub(crate) async fn remove_file(conn: &libsql::Connection, project_root: &Path, file_path: &Path) -> Result<()> {
+    let rel_path = file_path.strip_prefix(project_root)
+        .unwrap_or(file_path)
+        .to_string_lossy()
+        .to_string();
+    conn.execute("DELETE FROM index_chunks WHERE file_path = ?1", libsql::params![rel_path.clone()]).await?;
+    conn.execute("DELETE FROM index_files WHERE path = ?1", libsql::params![rel_path]).await?;
+    Ok(())
+}
+
 /// Index a single file. Returns number of new/updated chunks stored (0 = unchanged).
-async fn index_file(
+pub(crate) async fn index_file(
     project_root: &Path,
     file_path: &Path,
     lang: &Lang,
@@ -303,7 +314,7 @@ fn sha256(data: &str) -> String {
 }
 
 /// Simple glob match for exclude patterns. Handles `**` and `*` wildcards.
-fn glob_match(pattern: &str, path: &str) -> bool {
+pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
     let pattern = pattern.replace('\\', "/");
     let path = path.replace('\\', "/");
     // "vendor/**" or "vendor/" → anything under that directory
