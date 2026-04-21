@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Wrapper used by both .mcp.json and hooks to launch the memso binary.
-# Honours MEMSO_BINARY_OVERRIDE for dev/custom builds; falls back to the
+# Wrapper used by both .mcp.json and hooks to launch the tyto binary.
+# Honours TYTO_BINARY_OVERRIDE for dev/custom builds; falls back to the
 # binary installed by bootstrap.sh in CLAUDE_PLUGIN_DATA.
 #
 # On a cold install the binary may not yet exist when this script runs —
 # bootstrap.sh downloads it in parallel. Poll for up to 30 s before giving up.
-BINARY="${MEMSO_BINARY_OVERRIDE:-${CLAUDE_PLUGIN_DATA}/memso}"
+BINARY="${TYTO_BINARY_OVERRIDE:-${CLAUDE_PLUGIN_DATA}/tyto}"
 
 # On a cold install bootstrap.sh downloads the binary in parallel with this
 # script starting. Poll until it appears (or .exe variant on Windows) for up

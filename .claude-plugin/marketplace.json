@@ -1,18 +1,18 @@
 {
-  "name": "memso",
+  "name": "tyto",
   "owner": {
     "name": "Michael Alexander",
     "email": "michael@beefsack.com"
   },
   "metadata": {
-    "description": "Persistent memory for AI agents across sessions"
+    "description": "Persistent memory and code intelligence for AI agents across sessions"
   },
   "plugins": [
     {
-      "name": "memso",
+      "name": "tyto",
       "source": "./agents/claude",
-      "description": "Persistent memory for AI agents - stores decisions, discoveries, and gotchas across sessions using local vector + BM25 search.",
-      "homepage": "https://github.com/beefsack/memso",
+      "description": "Persistent memory and code intelligence for AI agents - stores decisions, discoveries, and gotchas across sessions using local vector + BM25 search.",
+      "homepage": "https://github.com/tyto-ai/tyto",
       "license": "Apache-2.0",
       "keywords": ["memory", "persistence", "mcp", "agent"]
     }

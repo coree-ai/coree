@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "memso": {
+    "tyto": {
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh",
       "args": ["serve"]
     }
