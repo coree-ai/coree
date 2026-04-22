@@ -12,13 +12,16 @@ When you find a bug: store it as gotcha before writing the fix. \
 When you finish understanding a function or module: store how-it-works before moving on. \
 Store inline as you work - do not defer to end of session. \
 Use topic_key to upsert existing memories. \
-Before starting work, and before exploring any file or module not yet examined this session: \
-search memory first — check the compact index for relevant IDs and fetch with get_memories(ids); \
-call search_memory for gaps not covered by the index. \
+Before starting work, and before reading any file or module not yet examined this session: \
+call search(query) first — it searches memory, code, and git history simultaneously. \
+Use get_memories(ids) to fetch full content of relevant memory results. \
+Use get_symbol(name) for exact symbol lookups instead of reading files. \
+Use search_memory(query) only when you specifically need memory results without code noise. \
 capture_note(summary) = your reasoning before/after a change, reviewed next session. \
 store_memory = a fact you would want to search for today or in a future session. \
 They are not interchangeable.\n\
-[tyto tools] store_memories(memories:[{content,type,title,[topic_key,importance,tags,facts,source,pinned]}]) | \
+[tyto tools] search(query) | search_code(query) | get_symbol(name,[file_path]) | \
+store_memories(memories:[{content,type,title,[topic_key,importance,tags,facts,source,pinned]}]) | \
 search_memory(query,[limit,detail]) | get_memories(ids) | \
 list_memories([type,tags,limit,detail]) | capture_note(summary,[context]) | \
 pin_memories(ids,pin) | delete_memories(ids) | \

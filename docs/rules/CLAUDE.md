@@ -1,14 +1,27 @@
-## Persistent Memory
+## Persistent Memory and Code Intelligence
 
-You have persistent memory across sessions via the tyto MCP server.
+You have persistent memory and indexed code search across sessions via the tyto MCP server.
 
-### Retrieving context
+### Searching — always start here
 
-At the start of every session, call:
-  search_memory(query="project overview conventions decisions", project_id="<project>")
+Before starting any task, and before reading any file not yet examined this session:
 
-Before starting a significant task or when entering an unfamiliar area, call:
-  search_memory(query="<relevant topic>")
+  search(query="<topic>")
+
+This searches memory, source code, and git history simultaneously. It is the default
+entry point for all lookups. Use it before reaching for Read or grep.
+
+For exact symbol lookups (faster and more precise than search):
+
+  get_symbol(name="function_or_struct_name")
+
+For code-only results when memory noise would obscure what you need:
+
+  search_code(query="<topic>")
+
+For memory-only results (decisions, gotchas, preferences):
+
+  search_memory(query="<topic>")
 
 Call get_memories(ids=[<id>]) to read the full content of any result that looks relevant.
 
@@ -40,14 +53,8 @@ code, or anything already documented in CLAUDE.md.
 - facts: array of short discrete statements, e.g.
   ["Uses tower-sessions-sqlx-store 0.15.0", "PostgresStore auto-migrates on startup"]
 
-## Code Intelligence
-
-You also have four code intelligence tools that search the indexed source code:
-
-- search(query) - unified search across memories AND code simultaneously. Use this by default.
-- search_code(query) - code-only search when memory results would add noise.
-- get_symbol(name, file_path?) - look up a specific function, struct, class, or method.
-- list_hotspots(min_churn?, limit?) - most-changed symbols; use before touching volatile areas.
+### Notes on code search
 
 search() degrades gracefully to memory-only if the index is not yet ready.
-The index builds in the background on startup; tools return empty code results during the first build.
+The index builds in the background on startup; code results populate as files are processed.
+Only Rust and Python source files are indexed. Markdown and config files are not.
