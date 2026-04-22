@@ -1,8 +1,7 @@
 {
   "mcpServers": {
     "tyto": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh",
-      "args": ["serve"]
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/tyto.cmd"
     }
   }
 }

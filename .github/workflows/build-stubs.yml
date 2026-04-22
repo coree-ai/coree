@@ -1,0 +1,110 @@
+name: Build Bootstrap Binaries
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/bin/tyto-bootstrap.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    paths:
+      - 'src/bin/tyto-bootstrap.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.artifact }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: tyto-bootstrap-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: tyto-bootstrap-linux-aarch64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: tyto-bootstrap-macos
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: tyto-bootstrap-windows.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bootstrap-${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --bin tyto-bootstrap --target ${{ matrix.target }}
+
+      - name: Rename artifact (Unix)
+        if: runner.os != 'Windows'
+        run: cp target/${{ matrix.target }}/release/tyto-bootstrap ${{ matrix.artifact }}
+
+      - name: Rename artifact (Windows)
+        if: runner.os == 'Windows'
+        run: copy target\${{ matrix.target }}\release\tyto-bootstrap.exe ${{ matrix.artifact }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  commit:
+    name: Commit bootstrap binaries
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tyto-bootstrap-linux-x86_64
+          path: agents/claude/bin/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tyto-bootstrap-linux-aarch64
+          path: agents/claude/bin/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tyto-bootstrap-macos
+          path: agents/claude/bin/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tyto-bootstrap-windows.exe
+          path: agents/claude/bin/
+
+      - name: Set executable permissions
+        run: |
+          chmod +x agents/claude/bin/tyto-bootstrap-linux-x86_64
+          chmod +x agents/claude/bin/tyto-bootstrap-linux-aarch64
+          chmod +x agents/claude/bin/tyto-bootstrap-macos
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add agents/claude/bin/
+          git diff --cached --quiet || git commit -m "chore: update bootstrap binaries [skip ci]"
+          git push
