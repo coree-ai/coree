@@ -42,17 +42,15 @@ fn serve_state(config: &Config) -> ServeState {
     if config.serve_ready_path().exists() {
         return ServeState::Ready;
     }
-    use fs4::fs_std::FileExt;
     let lock_path = config.serve_lock_path();
     let Ok(file) = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(&lock_path) else {
         return ServeState::NotRunning;
     };
-    // Ok(true)  = we acquired the lock -> nothing is running
-    // Ok(false) = another process holds it -> serve is loading
-    match file.try_lock_exclusive() {
-        Ok(true) => { let _ = file.unlock(); ServeState::NotRunning }
-        Ok(false) => ServeState::Loading,
-        Err(_) => ServeState::NotRunning,
+    // Ok(()) = we acquired the lock -> nothing is running
+    // Err(_) = another process holds it (WouldBlock) -> serve is loading
+    match file.try_lock() {
+        Ok(()) => { let _ = file.unlock(); ServeState::NotRunning }
+        Err(_) => ServeState::Loading,
     }
 }
 

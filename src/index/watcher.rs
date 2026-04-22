@@ -67,8 +67,8 @@ fn try_acquire_lock(path: &Path) -> Option<std::fs::File> {
         .write(true).create(true).truncate(false)
         .open(path)
         .ok()?;
-    match fs4::fs_std::FileExt::try_lock_exclusive(&f) {
-        Ok(true) => Some(f),
+    match f.try_lock() {
+        Ok(()) => Some(f),
         _ => None,
     }
 }

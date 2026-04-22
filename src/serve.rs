@@ -893,12 +893,19 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     if let Some(parent) = lock_file_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    // Try to acquire the exclusive lock non-blocking. If another instance already
+    // holds it, continue as a secondary: start the MCP transport normally so
+    // Claude Code connects successfully, but skip state-file management and the
+    // code indexer (the primary handles those).
     let lock_file = std::fs::OpenOptions::new()
         .write(true).create(true).truncate(false)
         .open(&lock_file_path)
-        .and_then(|f| { fs4::fs_std::FileExt::lock_exclusive(&f)?; Ok(f) })
-        .map_err(|e| anyhow::anyhow!("Failed to acquire serve.lock: {e}"))?;
-    // Keep lock_file alive (lock held) until end of function.
+        .map_err(|e| anyhow::anyhow!("Failed to open serve.lock: {e}"))?;
+    let is_primary = match fs4::FileExt::try_lock(&lock_file) {
+        Ok(()) => { mlog!("tyto: acquired serve.lock (primary)"); true }
+        _ => { mlog!("tyto: serve.lock held by another process, starting as secondary"); false }
+    };
+    // Keep lock_file alive until end of function; drop releases the lock if held.
 
     let session_id = Uuid::new_v4().to_string();
     mlog!("tyto: session {session_id}, project \"{project_id}\"");
@@ -928,12 +935,14 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
             Ok(ready) => {
                 let embedder_for_idx = Arc::clone(&ready.embedder);
                 let _ = db_tx.send(DbState::Ready(Arc::new(ready)));
-                let _ = std::fs::write(&ready_file_bg, "");
+                if is_primary {
+                    let _ = std::fs::write(&ready_file_bg, "");
+                }
                 mlog!("tyto: database ready");
 
-                // Start code intelligence indexer (non-blocking: failures don't affect memory)
+                // Only the primary instance manages the code indexer.
                 use crate::config::StorageMode;
-                let index_enabled = !matches!(config_for_idx.index.storage.mode, StorageMode::Disabled);
+                let index_enabled = is_primary && !matches!(config_for_idx.index.storage.mode, StorageMode::Disabled);
                 if index_enabled {
                     let db_path = config_for_idx.index_db_path();
                     let project_root = config_for_idx.project_root.clone();
@@ -1003,8 +1012,10 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
         }
     };
 
-    // ready_file is cleaned up; lock_file is dropped here which releases the OS lock.
-    let _ = std::fs::remove_file(&ready_file);
+    // Primary cleans up serve.ready; lock_file drop releases the OS lock if held.
+    if is_primary {
+        let _ = std::fs::remove_file(&ready_file);
+    }
     drop(lock_file);
     serve_result
 }
