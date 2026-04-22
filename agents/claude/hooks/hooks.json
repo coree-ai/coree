@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/tyto.cmd inject --type session"
+            "command": "${CLAUDE_PLUGIN_ROOT}/../shared/scripts/tyto.cmd inject --type session"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/tyto.cmd inject --type prompt --budget 8000"
+            "command": "${CLAUDE_PLUGIN_ROOT}/../shared/scripts/tyto.cmd inject --type prompt --budget 8000"
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/tyto.cmd inject --type stop"
+            "command": "${CLAUDE_PLUGIN_ROOT}/../shared/scripts/tyto.cmd inject --type stop"
           }
         ]
       }
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/tyto.cmd inject --type compact"
+            "command": "${CLAUDE_PLUGIN_ROOT}/../shared/scripts/tyto.cmd inject --type compact"
           }
         ]
       }
