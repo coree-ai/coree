@@ -1,0 +1,31 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Tyto project allowlist"
+paths = [
+    # Test fixtures and documentation examples
+    "tests/",
+    "docs/",
+    "*.md",
+]
+regexes = [
+    # Placeholder/example values used in tests and docs
+    "your-token-here",
+    "example-token",
+    "libsql://example\\.turso\\.io",
+    "sk-test-",
+]
+commits = []
+
+[[rules]]
+description = "Turso auth token"
+id = "turso-auth-token"
+regex = '''TURSO_AUTH_TOKEN\s*=\s*[A-Za-z0-9_\-\.]{20,}'''
+tags = ["key", "turso"]
+
+[[rules]]
+description = "TYTO env var with credential-like value"
+id = "tyto-credential-env"
+regex = '''TYTO_(TOKEN|AUTH|SECRET|KEY|PASSWORD)\s*=\s*[^\s]{8,}'''
+tags = ["key", "tyto"]
