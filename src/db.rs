@@ -125,42 +125,54 @@ async fn open_replica_with_recovery(
             .build()
     };
 
-    match build().await {
-        Ok(db) => Ok(db),
-        Err(first_err) => {
-            // Replica files (`memory.replica.db`) are distinct from local-mode files
-            // (`memory.db`), so purging is always safe - there is no risk of deleting
-            // the user's local database. The remote is the source of truth.
-            mlog!("tyto: replica open failed ({first_err:#}), purging local files and retrying...");
-            purge_replica_files(path)?;
-            build()
-                .await
-                .with_context(|| format!("Failed to open replica DB at {} (after recovery attempt)", path.display()))
-        }
+    // Try build + sync, treating any error as a corruption signal worth purging for.
+    // Returns Ok(db) only when both build and sync succeed.
+    let try_open = || async {
+        let db = build().await?;
+        let t = std::time::Instant::now();
+        db.sync().await.map_err(|e| anyhow::anyhow!("replica sync failed: {e:#}"))?;
+        tracing::debug!(elapsed_ms = t.elapsed().as_millis(), "replica sync");
+        Ok::<_, anyhow::Error>(db)
+    };
+
+    // First attempt: use existing local files (fast incremental sync).
+    match try_open().await {
+        Ok(db) => return Ok(db),
+        Err(e) => mlog!("tyto: replica open failed ({e:#}), purging and retrying..."),
     }
+
+    // Recovery: purge all replica files and force a full re-sync from remote.
+    // Replica files are distinct from local-mode `memory.db`, so this is always safe.
+    purge_replica_files(path)?;
+
+    // Second attempt: fresh sync from Turso. If this also fails, surface the error.
+    try_open().await.with_context(|| {
+        format!("Failed to open replica DB at {} (after recovery attempt)", path.display())
+    })
 }
 
 /// Delete all libsql replica local files so the next open does a clean re-sync.
-/// Removes `<path>`, `<path>-shm`, `<path>-wal`, and `<path>-info`.
-fn purge_replica_files(path: &Path) -> Result<()> {
-    let suffixes = ["", "-shm", "-wal", "-info"];
-    for suffix in suffixes {
-        let candidate = if suffix.is_empty() {
-            path.to_path_buf()
-        } else {
-            let name = format!(
-                "{}{}",
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default(),
-                suffix
-            );
-            path.with_file_name(name)
-        };
-        match std::fs::remove_file(&candidate) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e).with_context(|| format!("Failed to remove {}", candidate.display())),
+/// Deletes every file in the same directory whose name starts with the replica
+/// filename — this covers any suffix libsql uses (.db, -shm, -wal, -info, -meta,
+/// future variants) without needing to enumerate them explicitly.
+pub fn purge_replica_files(path: &Path) -> Result<()> {
+    let parent = path.parent().unwrap_or(std::path::Path::new("."));
+    let prefix = path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let entries = std::fs::read_dir(parent)
+        .with_context(|| format!("Failed to read dir {}", parent.display()))?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with(&prefix) {
+            match std::fs::remove_file(entry.path()) {
+                Ok(()) => tracing::debug!(file = %name_str, "purged replica file"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e).with_context(|| format!("Failed to remove {}", entry.path().display())),
+            }
         }
     }
     Ok(())
