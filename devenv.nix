@@ -10,6 +10,7 @@
 
   packages = with pkgs; [
     act
+    cargo-bloat
     cargo-outdated
     gh
     python3
