@@ -109,34 +109,49 @@ pub async fn search(
     project_id: &str,
     limit: usize,
 ) -> Result<Vec<CompactResult>> {
+    let t_total = std::time::Instant::now();
     let blob = embed::floats_to_blob(&embedding);
 
     // Stream A: vector search (filtered to current model only; memories lacking a
     // current-model vector fall through to BM25 gracefully during re-embedding).
+    // Also captures the top cosine distance as an absolute relevance gate: if the
+    // nearest neighbour is too far away, the query has no relevant memories at all.
+    const MAX_COSINE_DIST: f64 = 0.38;
     let mut vector_ranks: HashMap<String, usize> = HashMap::new();
     {
+        let t = std::time::Instant::now();
         let mut rows = conn
             .query(
-                "SELECT m.id
+                "SELECT m.id, vector_distance_cos(v.embedding, vector32(?3)) as dist
                  FROM memories m
                  JOIN memory_vectors v ON v.memory_id = m.id
                  WHERE m.project_id = ?1 AND m.status = 'active' AND v.embed_model = ?2
-                 ORDER BY vector_distance_cos(v.embedding, vector32(?3))
+                 ORDER BY dist
                  LIMIT ?4",
                 params![project_id.to_string(), embed::model_id(), blob, (limit * 2) as i64],
             )
             .await?;
         let mut rank = 0usize;
+        let mut top_dist: Option<f64> = None;
         while let Some(row) = rows.next().await? {
             let id: String = row.get(0)?;
+            let dist: f64 = row.get(1).unwrap_or(1.0);
+            if top_dist.is_none() { top_dist = Some(dist); }
             vector_ranks.insert(id, rank);
             rank += 1;
+        }
+        let top_dist = top_dist.unwrap_or(1.0);
+        tracing::debug!(elapsed_ms = t.elapsed().as_millis(), results = vector_ranks.len(), top_cosine_dist = format!("{top_dist:.3}"), "vector search");
+        if top_dist > MAX_COSINE_DIST {
+            tracing::debug!(top_cosine_dist = format!("{top_dist:.3}"), threshold = MAX_COSINE_DIST, "cosine gate: no relevant memories");
+            return Ok(vec![]);
         }
     }
 
     // Stream B: BM25 full-text search
     let mut bm25_ranks: HashMap<String, usize> = HashMap::new();
     {
+        let t = std::time::Instant::now();
         let fts_query = build_fts_query(query);
         let mut rows = conn
             .query(
@@ -157,6 +172,7 @@ pub async fn search(
             bm25_ranks.insert(id, rank);
             rank += 1;
         }
+        tracing::debug!(elapsed_ms = t.elapsed().as_millis(), results = bm25_ranks.len(), "bm25 search");
     }
 
     // Collect all candidate IDs
@@ -168,10 +184,12 @@ pub async fn search(
     }
 
     if all_ids.is_empty() {
+        tracing::debug!(elapsed_ms = t_total.elapsed().as_millis(), "search total (no candidates)");
         return Ok(vec![]);
     }
 
     // Fetch metadata for all candidates in a single IN query.
+    let t = std::time::Instant::now();
     let now = Utc::now();
     let placeholders = all_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     let meta_sql = format!(
@@ -213,10 +231,12 @@ pub async fn search(
 
         scored.push(CompactResult { id, memory_type, title, created_at, importance, score, content_len: content_len as usize, facts_json, tags_json });
     }
+    tracing::debug!(elapsed_ms = t.elapsed().as_millis(), candidates = scored.len(), "metadata fetch");
 
     scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);
 
+    tracing::debug!(elapsed_ms = t_total.elapsed().as_millis(), results = scored.len(), "search total");
     Ok(scored)
 }
 

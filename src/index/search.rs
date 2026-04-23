@@ -35,23 +35,33 @@ pub async fn search_code(
     let model = embed::model_id();
     let k = (limit * 2) as i64;
 
-    // Stream A: vector search
+    // Stream A: vector search — also captures top cosine distance as relevance gate.
+    const MAX_COSINE_DIST: f64 = 0.38;
     let mut vector_ranks: HashMap<String, usize> = HashMap::new();
     {
         let mut rows = conn.query(
-            "SELECT c.id
+            "SELECT c.id, vector_distance_cos(v.embedding, vector32(?2)) as dist
              FROM index_chunks c
              JOIN index_vectors v ON v.chunk_id = c.id
              WHERE v.embed_model = ?1
-             ORDER BY vector_distance_cos(v.embedding, vector32(?2))
+             ORDER BY dist
              LIMIT ?3",
             params![model.clone(), blob, k],
         ).await?;
         let mut rank = 0usize;
+        let mut top_dist: Option<f64> = None;
         while let Some(row) = rows.next().await? {
             let id: String = row.get(0)?;
+            let dist: f64 = row.get(1).unwrap_or(1.0);
+            if top_dist.is_none() { top_dist = Some(dist); }
             vector_ranks.insert(id, rank);
             rank += 1;
+        }
+        let top_dist = top_dist.unwrap_or(1.0);
+        tracing::debug!(top_cosine_dist = format!("{top_dist:.3}"), "code vector search");
+        if top_dist > MAX_COSINE_DIST {
+            tracing::debug!(top_cosine_dist = format!("{top_dist:.3}"), threshold = MAX_COSINE_DIST, "cosine gate: no relevant code");
+            return Ok(vec![]);
         }
     }
 
@@ -242,8 +252,8 @@ pub async fn index_stats(conn: &libsql::Connection) -> Result<(i64, i64)> {
 /// Format a CodeResult for display to the agent.
 pub fn format_result(r: &CodeResult, verbose: bool) -> String {
     let mut out = format!(
-        "[{}] {}:{}-{} {}\n",
-        r.symbol_kind, r.file_path, r.line_start, r.line_end, r.qualified_name
+        "[{}] {:.3}  {}:{}-{} {}\n",
+        r.symbol_kind, r.rrf_score, r.file_path, r.line_start, r.line_end, r.qualified_name
     );
     if let Some(ref sig) = r.signature {
         out.push_str(&format!("Signature: {sig}\n"));

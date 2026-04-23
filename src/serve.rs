@@ -731,41 +731,55 @@ impl TytoServer {
         )
         .await
         .unwrap_or_default();
+        tracing::debug!(elapsed_ms = t_mem.elapsed().as_millis(), results = memory_results.len(), "memory search");
 
         // Code search (best-effort: don't fail the whole search if index not ready)
+        let t_code = std::time::Instant::now();
         let code_results = if let Ok(idx) = self.try_index_ready() {
-            index::search::search_code(&idx.conn, embedding, &input.query, limit)
+            let r = index::search::search_code(&idx.conn, embedding, &input.query, limit)
                 .await
-                .unwrap_or_default()
+                .unwrap_or_default();
+            tracing::debug!(elapsed_ms = t_code.elapsed().as_millis(), results = r.len(), "code search");
+            r
         } else {
             vec![]
         };
 
-        let mut out = String::new();
-
-        if !memory_results.is_empty() {
-            out.push_str("=== Memories ===\n");
-            out.push_str(&crate::format::compact(&memory_results, 0, None));
-            out.push('\n');
+        // Merge memory and code results into a single list ranked by score.
+        // Each item is (score, formatted_string). Code results use a separator
+        // line since they span multiple lines (signature, doc, churn, history).
+        let mut items: Vec<(f64, String)> = Vec::new();
+        for r in &memory_results {
+            items.push((r.score, crate::format::compact_single(r)));
+        }
+        for r in &code_results {
+            let mut s = index::search::format_result(r, true);
+            s.push_str("---\n");
+            items.push((r.rrf_score, s));
         }
 
-        if !code_results.is_empty() {
-            out.push_str("=== Code ===\n");
-            for r in &code_results {
-                out.push_str(&index::search::format_result(r, true));
-                out.push_str("---\n");
-            }
-        }
+        // Sort by score descending, then drop anything below the minimum threshold.
+        // Threshold eliminates low-signal results that waste context on noise.
+        const MIN_SCORE: f64 = 0.012;
+        items.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        items.retain(|(score, _)| *score >= MIN_SCORE);
 
-        if out.is_empty() {
+        if items.is_empty() {
+            tracing::debug!(elapsed_ms = t_search.elapsed().as_millis(), "search handler (no results above threshold)");
             return Ok("No results found.".to_string());
         }
 
-        let total = memory_results.len() + code_results.len();
+        let total = items.len();
+        let mut out = format!("--- Context ({total} results) ---\n");
+        for (_, text) in &items {
+            out.push_str(text);
+        }
+        let all_count = memory_results.len() + code_results.len();
         let truncated = memory_results.len() >= limit || code_results.len() >= limit;
         out.push_str(&format!(
-            "_meta: {{returned: {total}, truncated: {truncated}}}\n"
+            "_meta: {{returned: {total}, total_before_cutoff: {all_count}, truncated: {truncated}}}\n"
         ));
+        tracing::debug!(elapsed_ms = t_search.elapsed().as_millis(), total, "search handler total");
         Ok(out)
     }
 }

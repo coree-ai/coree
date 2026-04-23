@@ -23,12 +23,21 @@ pub fn compact(
     for r in results {
         let date = r.created_at.get(..10).unwrap_or(&r.created_at);
         out.push_str(&format!(
-            "[{:<18} {:.2}] {}  {}  ~{}c  {}\n",
-            r.memory_type, r.importance, r.id, date, r.content_len, r.title
+            "[{:<18} {:.2}] {:.3}  {}  {}  ~{}c  {}\n",
+            r.memory_type, r.importance, r.score, r.id, date, r.content_len, r.title
         ));
     }
     out.push_str("---\n");
     out
+}
+
+/// Format a single memory as one line (no header/footer), for use in merged ranked output.
+pub fn compact_single(r: &CompactResult) -> String {
+    let date = r.created_at.get(..10).unwrap_or(&r.created_at);
+    format!(
+        "[{:<18} {:.2}] {:.3}  {}  {}  ~{}c  {}\n",
+        r.memory_type, r.importance, r.score, r.id, date, r.content_len, r.title
+    )
 }
 
 /// Compact listing with facts and tags shown below each entry.
@@ -37,8 +46,8 @@ pub fn summary(results: &[CompactResult]) -> String {
     for r in results {
         let date = r.created_at.get(..10).unwrap_or(&r.created_at);
         out.push_str(&format!(
-            "[{:<18} {:.2}] {}  {}  ~{}c  {}\n",
-            r.memory_type, r.importance, r.id, date, r.content_len, r.title
+            "[{:<18} {:.2}] {:.3}  {}  {}  ~{}c  {}\n",
+            r.memory_type, r.importance, r.score, r.id, date, r.content_len, r.title
         ));
         let facts: Vec<String> = r.facts_json.as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
