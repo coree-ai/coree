@@ -27,6 +27,7 @@ pub async fn ensure(conn: &Connection) -> Result<()> {
              line_end       INTEGER NOT NULL,
              language       TEXT NOT NULL,
              churn_count    INTEGER DEFAULT 0,
+             hotspot_score  REAL DEFAULT 0.0,
              indexed_at     TEXT NOT NULL,
              content_hash   TEXT NOT NULL
          );
@@ -84,5 +85,12 @@ pub async fn ensure(conn: &Connection) -> Result<()> {
         ",
     )
     .await?;
+
+    // Add hotspot_score column to existing DBs (idempotent: error ignored if already present).
+    let _ = conn.execute(
+        "ALTER TABLE index_chunks ADD COLUMN hotspot_score REAL DEFAULT 0.0",
+        libsql::params![],
+    ).await;
+
     Ok(())
 }

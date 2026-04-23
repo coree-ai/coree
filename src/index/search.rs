@@ -18,6 +18,7 @@ pub struct CodeResult {
     pub signature: Option<String>,
     pub doc_comment: Option<String>,
     pub churn_count: i64,
+    pub hotspot_score: f64,
     pub language: String,
     pub rrf_score: f64,
     pub related_commits: Vec<String>,
@@ -93,7 +94,7 @@ pub async fn search_code(
     let placeholders = all_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     let sql = format!(
         "SELECT id, symbol_name, qualified_name, symbol_kind, file_path,
-                line_start, line_end, signature, doc_comment, churn_count, language
+                line_start, line_end, signature, doc_comment, churn_count, hotspot_score, language
          FROM index_chunks WHERE id IN ({placeholders})"
     );
     let mut rows = conn.query(&sql, params_from_iter(all_ids.iter().cloned())).await?;
@@ -115,7 +116,8 @@ pub async fn search_code(
             signature: row.get(7).ok(),
             doc_comment: row.get(8).ok(),
             churn_count: row.get(9).unwrap_or(0),
-            language: row.get(10).unwrap_or_default(),
+            hotspot_score: row.get(10).unwrap_or(0.0),
+            language: row.get(11).unwrap_or_default(),
             rrf_score: rrf_v + rrf_f,
             related_commits: vec![],
         });
@@ -163,7 +165,7 @@ pub async fn get_symbol(
     let (sql, params_vec): (String, Vec<libsql::Value>) = if let Some(fp) = file_path {
         (
             "SELECT id, symbol_name, qualified_name, symbol_kind, file_path,
-                    line_start, line_end, signature, doc_comment, churn_count, language
+                    line_start, line_end, signature, doc_comment, churn_count, hotspot_score, language
              FROM index_chunks
              WHERE (symbol_name = ?1 OR qualified_name = ?1 OR qualified_name LIKE ?2)
                AND file_path = ?3
@@ -178,10 +180,10 @@ pub async fn get_symbol(
     } else {
         (
             "SELECT id, symbol_name, qualified_name, symbol_kind, file_path,
-                    line_start, line_end, signature, doc_comment, churn_count, language
+                    line_start, line_end, signature, doc_comment, churn_count, hotspot_score, language
              FROM index_chunks
              WHERE symbol_name = ?1 OR qualified_name = ?1 OR qualified_name LIKE ?2
-             ORDER BY churn_count DESC, line_start
+             ORDER BY hotspot_score DESC, churn_count DESC, line_start
              LIMIT 20".to_string(),
             vec![
                 libsql::Value::Text(name_path.to_string()),
@@ -205,49 +207,13 @@ pub async fn get_symbol(
             signature: row.get(7).ok(),
             doc_comment: row.get(8).ok(),
             churn_count: row.get(9).unwrap_or(0),
-            language: row.get(10).unwrap_or_default(),
+            hotspot_score: row.get(10).unwrap_or(0.0),
+            language: row.get(11).unwrap_or_default(),
             rrf_score: 0.0,
             related_commits: vec![],
         };
         r.related_commits = fetch_related_commits(conn, &id, 5).await?;
         results.push(r);
-    }
-    Ok(results)
-}
-
-/// List the most-changed symbols (hotspots).
-pub async fn list_hotspots(
-    conn: &libsql::Connection,
-    min_churn: i64,
-    limit: usize,
-) -> Result<Vec<CodeResult>> {
-    let mut rows = conn.query(
-        "SELECT id, symbol_name, qualified_name, symbol_kind, file_path,
-                line_start, line_end, signature, doc_comment, churn_count, language
-         FROM index_chunks
-         WHERE churn_count >= ?1
-         ORDER BY churn_count DESC
-         LIMIT ?2",
-        params![min_churn, limit as i64],
-    ).await?;
-
-    let mut results = Vec::new();
-    while let Some(row) = rows.next().await? {
-        results.push(CodeResult {
-            id: row.get(0)?,
-            symbol_name: row.get(1)?,
-            qualified_name: row.get(2)?,
-            symbol_kind: row.get(3)?,
-            file_path: row.get(4)?,
-            line_start: row.get(5)?,
-            line_end: row.get(6)?,
-            signature: row.get(7).ok(),
-            doc_comment: row.get(8).ok(),
-            churn_count: row.get(9).unwrap_or(0),
-            language: row.get(10).unwrap_or_default(),
-            rrf_score: 0.0,
-            related_commits: vec![],
-        });
     }
     Ok(results)
 }
@@ -294,6 +260,9 @@ pub fn format_result(r: &CodeResult, verbose: bool) -> String {
     }
     if r.churn_count > 0 {
         out.push_str(&format!("Churn: {} commits\n", r.churn_count));
+    }
+    if r.hotspot_score > 0.01 {
+        out.push_str(&format!("Hotspot: {:.2}\n", r.hotspot_score));
     }
     if !r.related_commits.is_empty() {
         out.push_str(&format!(

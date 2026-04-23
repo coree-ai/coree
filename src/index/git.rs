@@ -7,6 +7,146 @@ pub struct CommitInfo {
     pub message: String,
 }
 
+/// Extended commit info with timestamp and change size for hotspot scoring.
+#[derive(Debug, Clone)]
+pub struct CommitStat {
+    pub sha: String,
+    pub message: String,
+    pub timestamp_unix: i64,
+    pub lines_changed: u32,
+}
+
+/// Fetch recent significant commits touching a file with timestamps and line counts.
+/// Use this instead of `file_commits` when hotspot scoring is needed.
+pub fn file_commits_with_stats(repo_root: &Path, file_path: &str, limit: usize) -> Vec<CommitStat> {
+    let output = match Command::new("git")
+        .arg("-C").arg(repo_root)
+        .arg("log")
+        .arg(format!("-n{}", limit * 3))
+        .arg("--format=format:%H|%at|%s")
+        .arg("--numstat")
+        .arg("--no-merges")
+        .arg("--")
+        .arg(file_path)
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return vec![],
+    };
+
+    if !output.status.success() {
+        return vec![];
+    }
+
+    let stdout = match std::str::from_utf8(&output.stdout) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+
+    parse_commits_with_stats(stdout)
+        .into_iter()
+        .filter(|c| is_significant(&c.message))
+        .take(limit)
+        .collect()
+}
+
+fn parse_commits_with_stats(output: &str) -> Vec<CommitStat> {
+    let mut results = Vec::new();
+    let mut current: Option<(String, i64, String)> = None; // (sha, timestamp_unix, message)
+    let mut lines_changed: u32 = 0;
+
+    for line in output.lines() {
+        if line.is_empty() {
+            continue;
+        }
+
+        // Header line: full 40-char SHA|unix_timestamp|message
+        let parts: Vec<&str> = line.splitn(3, '|').collect();
+        if parts.len() == 3
+            && parts[0].len() == 40
+            && parts[0].chars().all(|c| c.is_ascii_hexdigit())
+        {
+            if let Some((sha, ts, msg)) = current.take() {
+                results.push(CommitStat { sha, timestamp_unix: ts, message: msg, lines_changed });
+                lines_changed = 0;
+            }
+            let ts = parts[1].parse::<i64>().unwrap_or(0);
+            current = Some((parts[0].to_string(), ts, parts[2].to_string()));
+            continue;
+        }
+
+        // Numstat line: "added\tdeleted\tpath" (binary shows "-\t-\tpath")
+        if current.is_some() {
+            let cols: Vec<&str> = line.splitn(3, '\t').collect();
+            if cols.len() == 3 {
+                let added = cols[0].parse::<u32>().unwrap_or(0);
+                let deleted = cols[1].parse::<u32>().unwrap_or(0);
+                lines_changed += added + deleted;
+            }
+        }
+    }
+
+    if let Some((sha, ts, msg)) = current {
+        results.push(CommitStat { sha, timestamp_unix: ts, message: msg, lines_changed });
+    }
+
+    results
+}
+
+/// Compute the temporal hotspot score from a file's commit history.
+/// Formula: sum(exp(-ln2 * age_days / 180) * min(lines_changed / 100, 3))
+/// Higher = more recently and heavily modified. Half-life = 180 days.
+pub fn compute_hotspot_score(commits: &[CommitStat]) -> f64 {
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    commits.iter().map(|c| {
+        let age_days = (now_unix - c.timestamp_unix).max(0) as f64 / 86400.0;
+        let decay = (-std::f64::consts::LN_2 * age_days / 180.0).exp();
+        let size_weight = (c.lines_changed as f64 / 100.0).min(3.0);
+        decay * size_weight
+    }).sum()
+}
+
+/// Fetch commits that touched a specific line range in a file (git log -L).
+/// Returns compact one-line summaries: "sha7 message (author, date)".
+/// Returns empty vec if git is unavailable or the range has no history.
+pub fn symbol_commits(
+    repo_root: &Path,
+    file_path: &str,
+    line_start: usize,
+    line_end: usize,
+    limit: usize,
+) -> Vec<String> {
+    let range = format!("{line_start},{line_end}:{file_path}");
+    let output = match Command::new("git")
+        .arg("-C").arg(repo_root)
+        .arg("log")
+        .arg(format!("-L{range}"))
+        .arg("--no-patch")
+        .arg(format!("-n{limit}"))
+        .arg("--format=format:%h %s (%an, %as)")
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return vec![],
+    };
+
+    if !output.status.success() {
+        return vec![];
+    }
+
+    match std::str::from_utf8(&output.stdout) {
+        Ok(s) => s.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.to_string())
+            .collect(),
+        Err(_) => vec![],
+    }
+}
+
 /// Fetch recent significant commits touching a file.
 /// Returns up to `limit` commits, filtered for significance.
 pub fn file_commits(repo_root: &Path, file_path: &str, limit: usize) -> Vec<CommitInfo> {

@@ -210,13 +210,15 @@ pub(crate) async fn index_file(
         return Ok(0);
     }
 
-    // Fetch git commits once and reuse for churn_count, commit storage, and chunk linking.
-    let commits = if git_history {
+    // Fetch git commits once and reuse for churn_count, hotspot_score, commit storage, and chunk linking.
+    let (commits, hotspot_score) = if git_history {
         let root = project_root.to_path_buf();
         let rel = rel_path.clone();
-        tokio::task::spawn_blocking(move || git::file_commits(&root, &rel, 10)).await?
+        let stats = tokio::task::spawn_blocking(move || git::file_commits_with_stats(&root, &rel, 10)).await?;
+        let score = git::compute_hotspot_score(&stats);
+        (stats, score)
     } else {
-        vec![]
+        (vec![], 0.0)
     };
     let churn_count = commits.len() as i64;
 
@@ -248,8 +250,8 @@ pub(crate) async fn index_file(
             "INSERT INTO index_chunks \
              (id, file_path, symbol_name, qualified_name, symbol_kind, signature, \
               doc_comment, body_preview, line_start, line_end, language, \
-              churn_count, indexed_at, content_hash) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+              churn_count, hotspot_score, indexed_at, content_hash) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             params![
                 chunk_id.clone(),
                 rel_path.clone(),
@@ -263,6 +265,7 @@ pub(crate) async fn index_file(
                 chunk.line_end as i64,
                 lang_name.clone(),
                 churn_count,
+                hotspot_score,
                 now.clone(),
                 chunk_hash,
             ],

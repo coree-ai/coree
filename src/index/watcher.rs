@@ -260,16 +260,20 @@ async fn handle_new_commit(
     }).await?;
 
     for rel_path in &changed_files {
-        // Update churn_count to the real current count for all chunks in this file.
-        let new_count = tokio::task::spawn_blocking({
+        // Update churn_count and hotspot_score for all chunks in this file.
+        let (new_count, new_hotspot) = tokio::task::spawn_blocking({
             let root = root.to_path_buf();
             let rel = rel_path.clone();
-            move || git::file_commits(&root, &rel, 50).len() as i64
+            move || {
+                let stats = git::file_commits_with_stats(&root, &rel, 50);
+                let score = git::compute_hotspot_score(&stats);
+                (stats.len() as i64, score)
+            }
         }).await?;
 
         conn.execute(
-            "UPDATE index_chunks SET churn_count = ?1 WHERE file_path = ?2",
-            libsql::params![new_count, rel_path.clone()],
+            "UPDATE index_chunks SET churn_count = ?1, hotspot_score = ?2 WHERE file_path = ?3",
+            libsql::params![new_count, new_hotspot, rel_path.clone()],
         ).await?;
 
         // Link all chunks in this file to the new commit.
