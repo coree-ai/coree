@@ -985,6 +985,8 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     // inject can use a non-blocking lock attempt to detect whether we are running.
     let lock_file_path = config.serve_lock_path();
     let ready_file = config.serve_ready_path();
+    #[cfg(unix)]
+    let socket_path_for_cleanup = config.serve_socket_path();
     if let Some(parent) = lock_file_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -1015,6 +1017,12 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
         tool_router: TytoServer::tool_router(),
         prompt_router: TytoServer::prompt_router(),
     };
+
+    // Start local IPC socket so `tyto request` can reach the warm embedder/DB.
+    // Only the primary instance binds the socket; secondaries skip to avoid conflicts.
+    if is_primary {
+        spawn_socket_listener(server.clone(), &config);
+    }
 
     // Start MCP transport immediately — Claude Code sees us as connected right away.
     // Tool calls during the sync window return a "syncing" message instead of blocking.
@@ -1107,12 +1115,78 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
         }
     };
 
-    // Primary cleans up serve.ready; lock_file drop releases the OS lock if held.
+    // Primary cleans up state files; lock_file drop releases the OS lock if held.
     if is_primary {
         let _ = std::fs::remove_file(&ready_file);
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(&socket_path_for_cleanup);
     }
     drop(lock_file);
     serve_result
+}
+
+/// Bind a local IPC listener and accept MCP connections from `tyto request`.
+/// Each accepted connection gets its own cloned TytoServer and a full MCP session.
+/// Errors are logged and the listener exits; serve continues unaffected.
+fn spawn_socket_listener(server: TytoServer, config: &Config) {
+    #[cfg(unix)]
+    {
+        use tokio::net::UnixListener;
+        let socket_path = config.serve_socket_path();
+        // Remove stale socket from a previous crash before binding.
+        let _ = std::fs::remove_file(&socket_path);
+        match UnixListener::bind(&socket_path) {
+            Ok(listener) => {
+                tokio::spawn(async move {
+                    loop {
+                        match listener.accept().await {
+                            Ok((stream, _)) => {
+                                let srv = server.clone();
+                                tokio::spawn(async move {
+                                    match srv.serve(stream).await {
+                                        Ok(service) => { let _ = service.waiting().await; }
+                                        Err(e) => mlog!("tyto: socket client error: {e}"),
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                mlog!("tyto: socket accept error: {e}");
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+            Err(e) => mlog!("tyto: failed to bind Unix socket: {e}"),
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use tokio::net::windows::named_pipe::ServerOptions;
+        let pipe_name = config.serve_pipe_name();
+        tokio::spawn(async move {
+            loop {
+                let pipe = match ServerOptions::new().first_pipe_instance(false).create(&pipe_name) {
+                    Ok(p) => p,
+                    Err(e) => { mlog!("tyto: named pipe create error: {e}"); break; }
+                };
+                if pipe.connect().await.is_err() {
+                    continue;
+                }
+                let srv = server.clone();
+                tokio::spawn(async move {
+                    match srv.serve(pipe).await {
+                        Ok(service) => { let _ = service.waiting().await; }
+                        Err(e) => mlog!("tyto: pipe client error: {e}"),
+                    }
+                });
+            }
+        });
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    let _ = (server, config);
 }
 
 /// Resolves once the DB state transitions to [`DbState::Failed`].

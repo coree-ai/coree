@@ -3,7 +3,7 @@ use chrono::Utc;
 use std::env;
 use std::io::{IsTerminal, Read};
 
-use crate::{config::{StorageMode, Config}, db::Db, migrations, project_id, retrieve};
+use crate::{config::{StorageMode, Config}, db::Db, migrations, project_id, request, retrieve};
 
 const INSTRUCTIONS: &str = "[tyto] Store every decision, discovery, gotcha, failure, and unexpected outcome. \
 Err on the side of storing - use importance (0.0-1.0) to signal value, not omission. \
@@ -151,13 +151,41 @@ async fn run_inner(
         );
     }
 
-    // If `tyto serve` is running, skip Db::open to avoid racing on the DB file.
+    // Resolve the prompt query once - stdin can only be consumed once.
+    // session/compact types don't use a query so leave it empty.
+    let prompt_query = match inject_type {
+        "session" | "compact" => String::new(),
+        _ => resolve_prompt_query(query_override),
+    };
+
+    // Socket delegation: if serve is ready, use its warm embedder for full hybrid search.
+    // Checked before storage-mode branching - the socket is IPC to the serve process
+    // and is independent of whether the backend is local SQLite or remote Turso.
+    if inject_type != "session" && inject_type != "compact"
+        && config.serve_ready_path().exists()
+        && !prompt_query.is_empty()
+    {
+        let t_ipc = std::time::Instant::now();
+        if let Some(results) = request::call_search(&config, &prompt_query, limit).await {
+            tracing::debug!(
+                elapsed_ms = t_ipc.elapsed().as_millis(),
+                total_ms = t_total.elapsed().as_millis(),
+                "inject via IPC done"
+            );
+            print_within_budget(&format!("{INSTRUCTIONS}{results}"), budget);
+            return Ok(());
+        }
+        tracing::debug!(elapsed_ms = t_ipc.elapsed().as_millis(), "IPC unavailable, falling through");
+    }
+
+    // If `tyto serve` is running locally, skip Db::open to avoid racing on the DB file.
     // Not applicable for remote mode: Turso handles concurrent connections safely.
     // We distinguish Ready (tools work) from Loading (tools return "syncing") so we
     // can give the user accurate information about what is happening and what to expect.
     if !matches!(config.memory.storage.mode, StorageMode::Remote) {
         match serve_state(&config) {
             ServeState::Ready => {
+                // Prompt type already handled above via socket delegation.
                 if inject_type == "session" || inject_type == "compact" {
                     println!(
                         "{INSTRUCTIONS}[tyto] MCP server is running — memory context is available via tools. \
@@ -170,7 +198,6 @@ async fn run_inner(
                 // Only session/compact hooks tell the agent about the loading state.
                 // Prompt hooks emit nothing — the agent already has instructions from
                 // the MCP server and there is no memory context to inject yet.
-                // Stop hooks emit nothing — there is nothing to checkpoint during loading.
                 if inject_type == "session" || inject_type == "compact" {
                     println!("{LOADING_MESSAGE}");
                 }
@@ -180,20 +207,21 @@ async fn run_inner(
         }
     }
 
+    let t_db = std::time::Instant::now();
     let db = Db::open(&config).await?;
     let conn = db.conn;
     migrations::run(&conn).await?;
+    tracing::debug!(elapsed_ms = t_db.elapsed().as_millis(), "db open + migrations");
 
     let pid = project_override
         .unwrap_or_else(|| project_id::resolve(&config.project_root, config.project_id.as_deref()));
 
-    match inject_type {
+    let result = match inject_type {
         "session" | "compact" => run_session(&conn, &pid, budget).await,
-        _ => {
-            let query = resolve_prompt_query(query_override);
-            run_prompt(&conn, &query, &pid, limit, budget).await
-        }
-    }
+        _ => run_prompt(&conn, &prompt_query, &pid, limit, budget).await,
+    };
+    tracing::debug!(elapsed_ms = t_total.elapsed().as_millis(), inject_type, "inject total");
+    result
 }
 
 // Uses BM25-only search (no ONNX model) to stay within the 500ms hook timeout.

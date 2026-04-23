@@ -7,6 +7,7 @@ pub mod format;
 pub mod inject;
 pub mod install;
 pub mod remote;
+pub mod request;
 pub mod migrations;
 pub mod project_id;
 pub mod retrieve;

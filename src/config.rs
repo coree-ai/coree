@@ -193,6 +193,24 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("serve.ready"))
     }
 
+    /// Unix socket path for the local IPC channel between `tyto serve` and `tyto request`.
+    /// On Windows the socket path is converted to a named pipe name in serve/request code.
+    pub fn serve_socket_path(&self) -> PathBuf {
+        self.db_path()
+            .parent()
+            .map(|p| p.join("tyto.sock"))
+            .unwrap_or_else(|| PathBuf::from("tyto.sock"))
+    }
+
+    /// Windows named pipe name derived from the socket path (unique per data directory).
+    #[cfg(windows)]
+    pub fn serve_pipe_name(&self) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.serve_socket_path().hash(&mut h);
+        format!(r"\\.\pipe\tyto-{:016x}", h.finish())
+    }
+
     /// Always returns the effective local DB path regardless of remote mode.
     /// Used by `remote enable` as the source/seed database.
     pub fn local_db_path(&self) -> PathBuf {

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tyto::{config::Config, inject, install, remote, serve, status};
+use tyto::{config::Config, inject, install, remote, request, serve, status};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -39,6 +39,13 @@ enum Command {
     Install {
         #[arg(long, help = "Preview changes without writing anything")]
         dry_run: bool,
+    },
+    /// Call an MCP tool on the running tyto serve instance via the local socket
+    Request {
+        #[arg(help = "Tool name to call")]
+        tool: String,
+        #[arg(help = "Tool arguments as a JSON object string (optional)")]
+        args: Option<String>,
     },
     /// Show current configuration and database status
     Status,
@@ -130,6 +137,15 @@ async fn main() -> Result<()> {
                 println!("Nothing to do - tyto is already fully configured.");
             } else if !dry_run {
                 println!("\nDone. Restart Claude Code for changes to take effect.");
+            }
+        }
+        Command::Request { tool, args } => {
+            tyto::log::init_tracing();
+            let cwd = std::env::current_dir()?;
+            let config = Config::load(&cwd)?;
+            if let Err(e) = request::run(&config, &tool, args.as_deref()).await {
+                eprintln!("tyto request error: {e}");
+                std::process::exit(1);
             }
         }
         Command::Status => {

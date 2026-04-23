@@ -7,7 +7,7 @@ description = "Persistent memory and code intelligence for AI agents, backed by 
 
 [dependencies]
 # MCP stdio transport
-rmcp = { version = "*", features = ["server", "transport-io"] }
+rmcp = { version = "*", features = ["server", "client", "transport-io"] }
 
 # Database - embedded SQLite replica with Turso sync
 libsql = "*"
