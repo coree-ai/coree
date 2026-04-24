@@ -1,17 +1,22 @@
-use anyhow::Result;
-use tokio::sync::Mutex;
+use anyhow::{Context, Result};
+use std::sync::Arc;
 
 /// Apply the code intelligence schema to index.db.
 /// All DDL is IF NOT EXISTS so it is safe to call on every startup.
-pub async fn ensure(conn: &Mutex<rusqlite::Connection>) -> Result<()> {
-    let conn = conn.lock().await;
-    
-    // Use synchronous rusqlite calls inside the lock.
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA busy_timeout=5000;
+pub async fn ensure(conn: &Arc<turso::Connection>) -> Result<()> {
+    // 1. Apply PRAGMAs using the safe pragma_update() method.
+    conn.pragma_update("journal_mode", "WAL")
+        .await
+        .context("Failed to set journal_mode=WAL")?;
+    conn.pragma_update("busy_timeout", "5000")
+        .await
+        .context("Failed to set busy_timeout")?;
 
-         CREATE TABLE IF NOT EXISTS index_files (
+    // 2. Apply base schema and native FTS index.
+    // Limbo (turso) uses native USING fts instead of the C-based FTS5 module.
+    // Native FTS indexes automatically stay in sync; no triggers required.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS index_files (
              path        TEXT PRIMARY KEY,
              content_hash TEXT NOT NULL,
              indexed_at  TEXT NOT NULL
@@ -45,27 +50,9 @@ pub async fn ensure(conn: &Mutex<rusqlite::Connection>) -> Result<()> {
              PRIMARY KEY (chunk_id, embed_model)
          );
 
-         CREATE VIRTUAL TABLE IF NOT EXISTS index_chunks_fts
-             USING fts5(symbol_name, qualified_name, signature, doc_comment, body_preview,
-                        content=index_chunks, content_rowid=rowid);
-
-         CREATE TRIGGER IF NOT EXISTS index_chunks_fts_insert
-             AFTER INSERT ON index_chunks BEGIN
-                 INSERT INTO index_chunks_fts(rowid, symbol_name, qualified_name,
-                     signature, doc_comment, body_preview)
-                 VALUES (new.rowid, new.symbol_name, new.qualified_name,
-                     COALESCE(new.signature, ''), COALESCE(new.doc_comment, ''),
-                     COALESCE(new.body_preview, ''));
-             END;
-
-         CREATE TRIGGER IF NOT EXISTS index_chunks_fts_delete
-             AFTER DELETE ON index_chunks BEGIN
-                 INSERT INTO index_chunks_fts(index_chunks_fts, rowid, symbol_name,
-                     qualified_name, signature, doc_comment, body_preview)
-                 VALUES ('delete', old.rowid, old.symbol_name, old.qualified_name,
-                     COALESCE(old.signature, ''), COALESCE(old.doc_comment, ''),
-                     COALESCE(old.body_preview, ''));
-             END;
+         -- Turso native FTS index
+         CREATE INDEX IF NOT EXISTS index_chunks_fts 
+             ON index_chunks USING fts(symbol_name, qualified_name, signature, doc_comment, body_preview);
 
          CREATE TABLE IF NOT EXISTS index_commits (
              sha       TEXT PRIMARY KEY,
@@ -83,13 +70,7 @@ pub async fn ensure(conn: &Mutex<rusqlite::Connection>) -> Result<()> {
          CREATE INDEX IF NOT EXISTS index_chunk_commits_by_sha
              ON index_chunk_commits (commit_sha);
         ",
-    )?;
-
-    // Add hotspot_score column to existing DBs (idempotent: error ignored if already present).
-    let _ = conn.execute(
-        "ALTER TABLE index_chunks ADD COLUMN hotspot_score REAL DEFAULT 0.0",
-        [],
-    );
+    ).await?;
 
     Ok(())
 }
