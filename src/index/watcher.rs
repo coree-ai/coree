@@ -275,11 +275,13 @@ async fn handle_new_commit(
         // Link all chunks in this file to the new commit.
         let mut rows = conn.query("SELECT id FROM index_chunks WHERE file_path = ?1", (rel_path.clone(),)).await?;
         while let Some(row) = rows.next().await? {
-            if let Ok(chunk_id) = row.get::<String>(0) {
-                let _ = conn.execute(
+            if let Ok(chunk_id) = row.get::<String>(0)
+                && let Err(e) = conn.execute(
                     "INSERT OR IGNORE INTO index_chunk_commits (chunk_id, commit_sha) VALUES (?1, ?2)",
                     (chunk_id, commit.sha.clone()),
-                ).await;
+                ).await
+            {
+                crate::mlog!("tyto: chunk_commit link error: {e:#}");
             }
         }
     }
