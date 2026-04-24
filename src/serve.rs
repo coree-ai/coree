@@ -1146,7 +1146,7 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     if is_primary.load(std::sync::atomic::Ordering::SeqCst) {
         let _ = std::fs::remove_file(&ready_file);
         #[cfg(unix)]
-        let _ = std::fs::remove_file(&config.serve_socket_path());
+        let _ = std::fs::remove_file(config.serve_socket_path());
     }
     serve_result
 }

@@ -348,8 +348,8 @@ pub async fn delete_batch(conn: &Connection, ids: &[String], project_id: &str) -
     let sql = format!(
         "UPDATE memories SET status = 'deleted' WHERE id IN ({placeholders}) AND project_id = ?"
     );
-    let params: Vec<Value> = std::iter::once(Value::Text(project_id.to_string()))
-        .chain(ids.iter().map(|s| Value::Text(s.clone())))
+    let params: Vec<Value> = ids.iter().cloned().map(Value::Text)
+        .chain(std::iter::once(Value::Text(project_id.to_string())))
         .collect();
     Ok(conn.execute(&sql, params_from_iter(params)).await?)
 }
