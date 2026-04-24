@@ -87,7 +87,9 @@ async fn open_replica_with_recovery(
 ) -> Result<turso::sync::Database> {
     let build = || async {
         let mut last_err = None;
-        for _ in 0..10 {
+        // Increase to 20 attempts with 250ms delay (~5 seconds total)
+        // to handle slow-exiting previous processes during restarts.
+        for i in 0..20 {
             match turso::sync::Builder::new_remote(path_str)
                 .with_remote_url(url)
                 .with_auth_token(token)
@@ -97,11 +99,14 @@ async fn open_replica_with_recovery(
                 Ok(db) => return Ok(db),
                 Err(e) => {
                     last_err = Some(e);
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    if i % 5 == 0 && i > 0 {
+                        mlog!("tyto: replica build attempt {i} failed, retrying...");
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
             }
         }
-        Err(anyhow::anyhow!("Failed to build replica after 10 attempts: {}", last_err.unwrap()))
+        Err(anyhow::anyhow!("Failed to build replica after 20 attempts: {}", last_err.unwrap()))
     };
 
     let try_sync = |db: turso::sync::Database| async move {
