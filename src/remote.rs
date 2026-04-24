@@ -36,10 +36,10 @@ pub async fn enable(
 
     println!("[3/6] Connecting to remote at {} ...", url);
     // Limbo 0.6.0 does not yet support direct remote client mode.
-    // We use a temporary file replica as a workaround.
-    let tmp_dir = std::env::temp_dir().join("tyto-remote-migrate");
-    std::fs::create_dir_all(&tmp_dir)?;
-    let path = tmp_dir.join("remote.db");
+    // We use a temporary file replica as a workaround. TempDir auto-cleans on drop.
+    let tmp = tempfile::Builder::new().prefix("tyto-remote-migrate-").tempdir()
+        .context("Failed to create temp dir for remote migration")?;
+    let path = tmp.path().join("remote.db");
     let path_str = path.to_str().context("temp path is not valid UTF-8")?;
     
     let remote_db = tokio::time::timeout(
@@ -120,9 +120,11 @@ pub async fn sync(config: &Config, force: bool) -> Result<String> {
     }
 
     println!("Connecting to remote at {} ...", url);
-    let tmp_dir = std::env::temp_dir().join("tyto-remote-sync");
-    std::fs::create_dir_all(&tmp_dir)?;
-    let path = tmp_dir.join("remote.db");
+    // Limbo 0.6.0 does not yet support direct remote client mode.
+    // We use a temporary file replica as a workaround. TempDir auto-cleans on drop.
+    let tmp = tempfile::Builder::new().prefix("tyto-remote-sync-").tempdir()
+        .context("Failed to create temp dir for remote sync")?;
+    let path = tmp.path().join("remote.db");
     let path_str = path.to_str().context("temp path is not valid UTF-8")?;
 
     let remote_db = tokio::time::timeout(

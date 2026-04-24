@@ -12,13 +12,16 @@ pub enum AnyDb {
 pub struct Db {
     pub conn: Connection,
     pub handle: AnyDb,
+    // Keeps the temp directory alive for direct-mode replicas. None for all other modes.
+    #[allow(dead_code)]
+    pub temp_dir: Option<tempfile::TempDir>,
 }
 
 impl Db {
     pub async fn open(config: &Config) -> Result<Self> {
         let t = std::time::Instant::now();
         let s = &config.memory.storage;
-        let any_db = match s.mode {
+        let (any_db, temp_dir) = match s.mode {
             StorageMode::Managed | StorageMode::Local | StorageMode::Disabled => {
                 let path = config.db_path();
                 ensure_parent_dir(&path)?;
@@ -28,7 +31,7 @@ impl Db {
                     .build()
                     .await
                     .with_context(|| format!("Failed to open local DB at {}", path.display()))?;
-                AnyDb::Local(db)
+                (AnyDb::Local(db), None)
             }
             StorageMode::Remote => {
                 let url = s
@@ -42,20 +45,23 @@ impl Db {
                 match s.remote_mode {
                     RemoteMode::Direct => {
                         // Limbo 0.6.0 does not yet support direct remote client mode.
-                        // We use a temporary file replica as a workaround.
-                        let tmp_dir = std::env::temp_dir().join("tyto-remote-direct");
-                        std::fs::create_dir_all(&tmp_dir)?;
-                        let path = tmp_dir.join("memory.db");
+                        // We use a temporary file replica as a workaround. The TempDir is kept
+                        // alive on Db so the directory is cleaned up when the connection closes.
+                        let tmp = tempfile::Builder::new()
+                            .prefix("tyto-remote-direct-")
+                            .tempdir()
+                            .context("Failed to create temp dir for direct-mode replica")?;
+                        let path = tmp.path().join("memory.db");
                         let path_str = path.to_str().context("temp path is not valid UTF-8")?;
                         let db = open_replica_with_recovery(path_str, &path, url, token).await?;
-                        AnyDb::Synced(db)
+                        (AnyDb::Synced(db), Some(tmp))
                     }
                     RemoteMode::Replica => {
                         let path = config.db_path();
                         ensure_parent_dir(&path)?;
                         let path_str = path.to_str().context("replica DB path is not valid UTF-8")?;
                         let db = open_replica_with_recovery(path_str, path.as_ref(), url, token).await?;
-                        AnyDb::Synced(db)
+                        (AnyDb::Synced(db), None)
                     }
                 }
             }
@@ -75,7 +81,7 @@ impl Db {
         }
 
         tracing::debug!(elapsed_ms = t.elapsed().as_millis(), "Db::open");
-        Ok(Self { conn, handle: any_db })
+        Ok(Self { conn, handle: any_db, temp_dir })
     }
 }
 

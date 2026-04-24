@@ -42,6 +42,8 @@ struct DbReady {
     write_lock: WriteLock,
     #[allow(dead_code)]
     handle: db::AnyDb,
+    #[allow(dead_code)]
+    temp_dir: Option<tempfile::TempDir>,
 }
 
 /// State of the database for two-phase startup.
@@ -1250,6 +1252,7 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
     let db = Db::open(config).await?;
     let conn = Arc::new(db.conn);
     let handle = db.handle;
+    let temp_dir = db.temp_dir;
 
     // In replica mode, compact any stale WAL from the previous session before
     // running migrations. A dirty WAL can hide tables that exist in Turso,
@@ -1275,7 +1278,7 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
     // In replica mode, a stale WAL from a previous session can overlay the main
     // db file after sync, causing "no such table" for tables that exist in Turso.
     // Purge and re-open once to force a clean full re-sync.
-    let (conn, handle) = if let Err(ref e) = mig_result {
+    let (conn, handle, temp_dir) = if let Err(ref e) = mig_result {
         let is_replica = matches!(
             config.memory.storage.remote_mode,
             RemoteMode::Replica
@@ -1288,12 +1291,12 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
             let conn = Arc::new(db.conn);
             mlog!("tyto: running migrations (retry)...");
             migrations::run(&conn).await?;
-            (conn, db.handle)
+            (conn, db.handle, db.temp_dir)
         } else {
             return Err(mig_result.unwrap_err());
         }
     } else {
-        (conn, handle)
+        (conn, handle, temp_dir)
     };
 
     mlog!("tyto: loading embedding model (first run will download ~22MB)...");
@@ -1335,7 +1338,7 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
     // gracefully while this is in progress.
     tokio::spawn(reembed_stale(Arc::clone(&conn), Arc::clone(&embedder)));
 
-    Ok(DbReady { conn, embedder, write_lock, handle })
+    Ok(DbReady { conn, embedder, write_lock, handle, temp_dir })
 }
 
 async fn shutdown_signal() {
