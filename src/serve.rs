@@ -19,6 +19,7 @@ use serde_with::{DisplayFromStr, PickFirst, json::JsonString, serde_as};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
+use turso::Connection;
 
 
 use crate::{
@@ -35,8 +36,14 @@ use crate::{
 
 /// Database connection and embedding model, available once background init completes.
 struct DbReady {
-    conn: Arc<libsql::Connection>,
+    conn: Arc<Connection>,
     embedder: Arc<Mutex<Embedder>>,
+    #[allow(dead_code)]
+    write_lock: WriteLock,
+    #[allow(dead_code)]
+    handle: db::AnyDb,
+    #[allow(dead_code)]
+    temp_dir: Option<tempfile::TempDir>,
 }
 
 /// State of the database for two-phase startup.
@@ -428,6 +435,11 @@ impl TytoServer {
         {
             let exclude: std::collections::HashSet<String> = input.ids.iter().cloned().collect();
 
+            // TUNING: 0.013 derived from empirical score distribution (2026-04-24).
+            // Stricter than search — unsolicited results must be genuinely related.
+            // Below 0.012 is general project context with no specific connection.
+            const MIN_SIMILAR_SCORE: f64 = 0.013;
+
             let mut mem_seen = std::collections::HashSet::new();
             let mut mem_similar: Vec<retrieve::CompactResult> = Vec::new();
             let mut code_seen = std::collections::HashSet::new();
@@ -440,7 +452,7 @@ impl TytoServer {
                     &ready.conn, embedding.clone(), title, &self.project_id, 8
                 ).await.unwrap_or_default();
                 for r in results {
-                    if !exclude.contains(&r.id) && mem_seen.insert(r.id.clone()) {
+                    if r.score >= MIN_SIMILAR_SCORE && !exclude.contains(&r.id) && mem_seen.insert(r.id.clone()) {
                         mem_similar.push(r);
                     }
                 }
@@ -449,7 +461,7 @@ impl TytoServer {
                         &idx.conn, embedding.clone(), title, 5
                     ).await.unwrap_or_default();
                     for r in code_results {
-                        if code_seen.insert(r.id.clone()) {
+                        if r.rrf_score >= MIN_SIMILAR_SCORE && code_seen.insert(r.id.clone()) {
                             code_similar.push(r);
                         }
                     }
@@ -503,7 +515,7 @@ impl TytoServer {
             .execute(
                 "INSERT INTO raw_captures (id, project_id, captured_at, tool_name, summary, raw_data) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                libsql::params![id, self.project_id.clone(), now, input.context, input.summary.clone(), input.summary.clone()],
+                (id, self.project_id.clone(), now, input.context, input.summary.clone(), input.summary.clone()),
             )
             .await
             .map(|_| format!("Staged note: {}", input.summary))
@@ -519,8 +531,10 @@ impl TytoServer {
         let total = input.ids.len();
         let action = if input.pin { "Pinned" } else { "Unpinned" };
         match retrieve::pin_batch(&ready.conn, &input.ids, &self.project_id, input.pin).await {
-            Ok(n) if n as usize == total => Ok(format!("{action} {n} memories")),
-            Ok(n) => Ok(format!("{action} {n}/{total} memories ({} not found)", total - n as usize)),
+            Ok(n) if n as usize == total => Ok(format!("{action} {total} memories")),
+            // turso execute() may return an unreliable count on file-based WAL DBs (upstream bug).
+            // saturating_sub prevents a display underflow; the actual pin operation is correct.
+            Ok(n) => Ok(format!("{action} {n}/{total} memories ({} not found)", total.saturating_sub(n as usize))),
             Err(e) => Err(format!("pin_memories failed: {e}")),
         }
     }
@@ -540,8 +554,10 @@ impl TytoServer {
         }
         let total = input.ids.len();
         match retrieve::delete_batch(&ready.conn, &input.ids, &self.project_id).await {
-            Ok(n) if n as usize == total => Ok(format!("Deleted {n} memories")),
-            Ok(n) => Ok(format!("Deleted {n}/{total} memories ({} not found)", total - n as usize)),
+            Ok(n) if n as usize == total => Ok(format!("Deleted {total} memories")),
+            // turso execute() may return an unreliable count on file-based WAL DBs (upstream bug).
+            // saturating_sub prevents a display underflow; the actual delete operation is correct.
+            Ok(n) => Ok(format!("Deleted {n}/{total} memories ({} not found)", total.saturating_sub(n as usize))),
             Err(e) => Err(format!("delete_memories failed: {e}")),
         }
     }
@@ -659,6 +675,8 @@ impl TytoServer {
         }
 
         // Cross-type similar results (best-effort: skip if DB not ready or embed fails)
+        // TUNING: same MIN_SIMILAR_SCORE as get_memories — unsolicited, must earn place.
+        const MIN_SIMILAR_SCORE: f64 = 0.013;
         if let Ok(db_ready) = self.try_ready() {
             let first = &results[0];
             let embed_text = format!(
@@ -671,9 +689,12 @@ impl TytoServer {
                 let mut e = db_ready.embedder.lock().await;
                 e.embed(&embed_text)
             } {
-                let mem_similar = retrieve::search(
+                let mem_similar: Vec<_> = retrieve::search(
                     &db_ready.conn, embedding.clone(), &embed_text, &self.project_id, 5
-                ).await.unwrap_or_default();
+                ).await.unwrap_or_default()
+                    .into_iter()
+                    .filter(|r| r.score >= MIN_SIMILAR_SCORE)
+                    .collect();
 
                 let exclude: std::collections::HashSet<String> =
                     results.iter().map(|r| r.id.clone()).collect();
@@ -681,7 +702,7 @@ impl TytoServer {
                     &idx.conn, embedding, &embed_text, 10
                 ).await.unwrap_or_default()
                     .into_iter()
-                    .filter(|r| !exclude.contains(&r.id))
+                    .filter(|r| !exclude.contains(&r.id) && r.rrf_score >= MIN_SIMILAR_SCORE)
                     .take(5)
                     .collect();
 
@@ -735,14 +756,25 @@ impl TytoServer {
 
         // Code search (best-effort: don't fail the whole search if index not ready)
         let t_code = std::time::Instant::now();
-        let code_results = if let Ok(idx) = self.try_index_ready() {
-            let r = index::search::search_code(&idx.conn, embedding, &input.query, limit)
-                .await
-                .unwrap_or_default();
-            tracing::debug!(elapsed_ms = t_code.elapsed().as_millis(), results = r.len(), "code search");
-            r
-        } else {
-            vec![]
+        let index_state_hint: Option<&str>;
+        let code_results = match self.try_index_ready() {
+            Ok(idx) => {
+                index_state_hint = None;
+                let r = index::search::search_code(&idx.conn, embedding, &input.query, limit)
+                    .await
+                    .unwrap_or_default();
+                tracing::debug!(elapsed_ms = t_code.elapsed().as_millis(), results = r.len(), "code search");
+                r
+            }
+            Err(_) => {
+                index_state_hint = match &*self.idx.borrow() {
+                    index::IndexState::Opening => Some("initializing"),
+                    index::IndexState::Failed(_) => Some("failed"),
+                    // Disabled is intentional — don't surface it on every search.
+                    _ => None,
+                };
+                vec![]
+            }
         };
 
         // Merge memory and code results into a single list ranked by score.
@@ -758,16 +790,21 @@ impl TytoServer {
             items.push((r.rrf_score, s));
         }
 
-        // Sort by score descending, then drop anything below the minimum threshold.
-        // Threshold eliminates low-signal results that waste context on noise.
-        const MIN_SCORE: f64 = 0.012;
+        // Sort by score descending, then apply two gates:
+        // 1. Top-score gate: if the best result is below 0.020 the whole set is noise
+        //    (empirical: irrelevant queries top out at ~0.017; relevant ones at 0.025+).
+        //    This avoids returning random cosine hits when nothing is relevant.
+        // 2. Floor gate: drop any individual result below 0.010 within an otherwise
+        //    relevant result set (removes stragglers that crept past the cosine filter).
+        const MIN_TOP_SCORE: f64 = 0.020;
+        const MIN_SCORE: f64 = 0.010;
         items.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        items.retain(|(score, _)| *score >= MIN_SCORE);
 
-        if items.is_empty() {
+        if items.is_empty() || items[0].0 < MIN_TOP_SCORE {
             tracing::debug!(elapsed_ms = t_search.elapsed().as_millis(), "search handler (no results above threshold)");
             return Ok("No results found.".to_string());
         }
+        items.retain(|(score, _)| *score >= MIN_SCORE);
 
         let total = items.len();
         let mut out = format!("--- Context ({total} results) ---\n");
@@ -776,8 +813,13 @@ impl TytoServer {
         }
         let all_count = memory_results.len() + code_results.len();
         let truncated = memory_results.len() >= limit || code_results.len() >= limit;
+        let index_field = match index_state_hint {
+            Some("initializing") => ", code_index: \"initializing — retry for code results\"",
+            Some("failed") => ", code_index: \"failed — check tyto-serve.log\"",
+            _ => "",
+        };
         out.push_str(&format!(
-            "_meta: {{returned: {total}, total_before_cutoff: {all_count}, truncated: {truncated}}}\n"
+            "_meta: {{returned: {total}, total_before_cutoff: {all_count}, truncated: {truncated}{index_field}}}\n"
         ));
         tracing::debug!(elapsed_ms = t_search.elapsed().as_millis(), total, "search handler total");
         Ok(out)
@@ -816,14 +858,14 @@ impl ServerHandler for TytoServer {
 
 /// Re-embed any memories that lack a vector for the current model.
 /// Runs as a background task; yields between batches to avoid starving MCP handlers.
-async fn reembed_stale(conn: Arc<libsql::Connection>, embedder: Arc<Mutex<Embedder>>) {
+async fn reembed_stale(conn: Arc<Connection>, embedder: Arc<Mutex<Embedder>>) {
     const BATCH: i64 = 10;
     let model = crate::embed::model_id();
     let mut total = 0usize;
 
     loop {
         let batch: Vec<(String, String)> = {
-            let mut rows = match conn
+            let mut rows: turso::Rows = match conn
                 .query(
                     "SELECT m.id, m.title || ' ' || m.content
                      FROM memories m
@@ -833,7 +875,7 @@ async fn reembed_stale(conn: Arc<libsql::Connection>, embedder: Arc<Mutex<Embedd
                          WHERE v.memory_id = m.id AND v.embed_model = ?1
                        )
                      LIMIT ?2",
-                    libsql::params![model.clone(), BATCH],
+                    (model.clone(), BATCH),
                 )
                 .await
             {
@@ -868,13 +910,13 @@ async fn reembed_stale(conn: Arc<libsql::Connection>, embedder: Arc<Mutex<Embedd
             let _ = conn
                 .execute(
                     "DELETE FROM memory_vectors WHERE memory_id = ?1",
-                    libsql::params![id.clone()],
+                    (id.clone(),),
                 )
                 .await;
             let _ = conn
                 .execute(
                     "INSERT INTO memory_vectors (memory_id, embed_model, embedding) VALUES (?1, ?2, ?3)",
-                    libsql::params![id, model.clone(), blob],
+                    (id, model.clone(), blob),
                 )
                 .await;
             total += 1;
@@ -999,24 +1041,14 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     // inject can use a non-blocking lock attempt to detect whether we are running.
     let lock_file_path = config.serve_lock_path();
     let ready_file = config.serve_ready_path();
-    #[cfg(unix)]
-    let socket_path_for_cleanup = config.serve_socket_path();
     if let Some(parent) = lock_file_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    // Try to acquire the exclusive lock non-blocking. If another instance already
-    // holds it, continue as a secondary: start the MCP transport normally so
-    // Claude Code connects successfully, but skip state-file management and the
-    // code indexer (the primary handles those).
+    
     let lock_file = std::fs::OpenOptions::new()
         .write(true).create(true).truncate(false)
         .open(&lock_file_path)
         .map_err(|e| anyhow::anyhow!("Failed to open serve.lock: {e}"))?;
-    let is_primary = match fs4::FileExt::try_lock(&lock_file) {
-        Ok(()) => { mlog!("tyto: acquired serve.lock (primary)"); true }
-        _ => { mlog!("tyto: serve.lock held by another process, starting as secondary"); false }
-    };
-    // Keep lock_file alive until end of function; drop releases the lock if held.
 
     let session_id = Uuid::new_v4().to_string();
     mlog!("tyto: session {session_id}, project \"{project_id}\"");
@@ -1032,60 +1064,80 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
         prompt_router: TytoServer::prompt_router(),
     };
 
-    // Start local IPC socket so `tyto request` can reach the warm embedder/DB.
-    // Only the primary instance binds the socket; secondaries skip to avoid conflicts.
-    if is_primary {
-        spawn_socket_listener(server.clone(), &config);
-    }
-
-    // Start MCP transport immediately — Claude Code sees us as connected right away.
-    // Tool calls during the sync window return a "syncing" message instead of blocking.
-    let service = server.serve(stdio()).await?;
-    mlog!("tyto: ready (syncing database in background)");
-
-    // Spawn background task: open memory DB, run migrations, load embedder.
-    // Once ready, also start the code indexer as a nested background task.
+    // Spawn background leader election and initialization task.
+    // This task polls the lock every second until it becomes the primary.
+    //
+    // GOTCHA: Synced replicas do not support multi-process concurrency in this version.
+    // We use a continuous polling leader-election strategy to ensure exactly one process 
+    // manages the database, while allowing secondary processes to start and proxy tool calls.
+    let config_for_bg = config.clone();
+    let db_tx_clone = db_tx.clone();
+    let idx_tx_clone = idx_tx.clone();
+    let server_for_socket = server.clone();
     let ready_file_bg = ready_file.clone();
-    let config_for_idx = config.clone();
+    let is_primary = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let is_primary_bg = Arc::clone(&is_primary);
+    
     tokio::spawn(async move {
-        match init_db_and_embedder(&config).await {
+        loop {
+            if lock_file.try_lock().is_ok() {
+                mlog!("tyto: acquired serve.lock (primary)");
+                is_primary_bg.store(true, std::sync::atomic::Ordering::SeqCst);
+                break;
+            }
+            // While waiting for the lock, we stay in the initial Syncing/Opening states.
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+
+        // Start local IPC socket so `tyto request` can reach the warm embedder/DB.
+        spawn_socket_listener(server_for_socket.clone(), &config_for_bg);
+
+        match init_db_and_embedder(&config_for_bg, Arc::clone(&server_for_socket.write_lock)).await {
             Ok(ready) => {
                 let embedder_for_idx = Arc::clone(&ready.embedder);
-                let _ = db_tx.send(DbState::Ready(Arc::new(ready)));
-                if is_primary {
-                    let _ = std::fs::write(&ready_file_bg, "");
-                }
+                let _ = db_tx_clone.send(DbState::Ready(Arc::new(ready)));
+                let _ = std::fs::write(&ready_file_bg, "");
                 mlog!("tyto: database ready");
 
-                // Only the primary instance manages the code indexer.
+                // The primary instance manages the code indexer.
                 use crate::config::StorageMode;
-                let index_enabled = is_primary && !matches!(config_for_idx.index.storage.mode, StorageMode::Disabled);
+                let index_enabled = !matches!(config_for_bg.index.storage.mode, StorageMode::Disabled);
                 if index_enabled {
-                    let db_path = config_for_idx.index_db_path();
-                    let project_root = config_for_idx.project_root.clone();
-                    let git_history = config_for_idx.index.git_history;
-                    let extra_excludes = config_for_idx.index.exclude.clone();
+                    let db_path = config_for_bg.index_db_path();
+                    let project_root = config_for_bg.project_root.clone();
+                    let git_history = config_for_bg.index.git_history;
+                    let extra_excludes = config_for_bg.index.exclude.clone();
                     tokio::spawn(async move {
                         mlog!("tyto: opening code index at {}", db_path.display());
                         match index::open(&db_path, project_root.clone(), git_history, Arc::clone(&embedder_for_idx)).await {
                             Ok(idx_ready) => {
                                 let idx_ready = Arc::new(idx_ready);
-                                let _ = idx_tx.send(index::IndexState::Ready(Arc::clone(&idx_ready)));
+                                let _ = idx_tx_clone.send(index::IndexState::Ready(Arc::clone(&idx_ready)));
                                 mlog!("tyto: code index ready, starting background indexing...");
-                                let conn = Arc::clone(&idx_ready.conn);
+                                // Indexer and watcher get dedicated connections — must NOT share
+                                // idx_ready.conn (the search connection) due to turso's per-Connection
+                                // ConcurrentGuard which allows only one concurrent operation per instance.
+                                let indexer_conn = match idx_ready.new_conn() {
+                                    Ok(c) => c,
+                                    Err(e) => { mlog!("tyto: failed to create indexer connection: {e:#}"); return; }
+                                };
                                 let emb = Arc::clone(&embedder_for_idx);
-                                match index::indexer::run(project_root.clone(), conn.clone(), emb.clone(), git_history, extra_excludes.clone()).await {
+                                match index::indexer::run(project_root.clone(), indexer_conn, emb.clone(), git_history, extra_excludes.clone()).await {
                                     Ok(r) => mlog!(
                                         "tyto: code index complete — {} files, {} chunks",
                                         r.files_indexed, r.chunks_stored
                                     ),
                                     Err(e) => mlog!("tyto: code index run failed: {e:#}"),
                                 }
-                                let watcher_lock = config_for_idx.index_watcher_lock_path();
+                                let watcher_conn = match idx_ready.new_conn() {
+                                    Ok(c) => c,
+                                    Err(e) => { mlog!("tyto: failed to create watcher connection: {e:#}"); return; }
+                                };
+                                let watcher_lock = config_for_bg.index_watcher_lock_path();
                                 index::watcher::start(
                                     watcher_lock,
                                     project_root,
-                                    conn,
+                                    watcher_conn,
                                     emb,
                                     git_history,
                                     extra_excludes,
@@ -1093,22 +1145,33 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
                             }
                             Err(e) => {
                                 mlog!("tyto: code index open failed: {e:#}");
-                                let _ = idx_tx.send(index::IndexState::Failed(format!("{e:#}")));
+                                let _ = idx_tx_clone.send(index::IndexState::Failed(format!("{e:#}")));
                             }
                         }
                     });
                 } else {
-                    let _ = idx_tx.send(index::IndexState::Disabled);
+                    let _ = idx_tx_clone.send(index::IndexState::Disabled);
                     mlog!("tyto: code indexing disabled in config");
                 }
             }
             Err(e) => {
                 mlog!("tyto: database init failed: {e:#}");
-                let _ = db_tx.send(DbState::Failed(format!("{e:#}")));
-                let _ = idx_tx.send(index::IndexState::Disabled);
+                let _ = db_tx_clone.send(DbState::Failed(format!("{e:#}")));
+                let _ = idx_tx_clone.send(index::IndexState::Disabled);
             }
         }
+        // Hand serve.lock ownership to the OS. The fd is closed at true process exit,
+        // not during Tokio shutdown. This ensures serve.lock is released only AFTER
+        // all other file handles (memory.db, index.db) are also released — eliminating
+        // the handover race where a new process acquires serve.lock while the old one
+        // still has DB files open during Tokio task cancellation.
+        std::mem::forget(lock_file);
     });
+
+    // Start MCP transport immediately — Claude Code sees us as connected right away.
+    // Tool calls during the sync window return a "syncing" message instead of blocking.
+    let service = server.serve(stdio()).await?;
+    mlog!("tyto: ready (waiting for database lock)");
 
     // Wait for client disconnect, shutdown signal, or a permanent DB init failure.
     // DB init failure is re-raised as an error so run() writes it to crash.log.
@@ -1129,13 +1192,12 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
         }
     };
 
-    // Primary cleans up state files; lock_file drop releases the OS lock if held.
-    if is_primary {
+    // Primary cleans up state files.
+    if is_primary.load(std::sync::atomic::Ordering::SeqCst) {
         let _ = std::fs::remove_file(&ready_file);
         #[cfg(unix)]
-        let _ = std::fs::remove_file(&socket_path_for_cleanup);
+        let _ = std::fs::remove_file(config.serve_socket_path());
     }
-    drop(lock_file);
     serve_result
 }
 
@@ -1228,22 +1290,25 @@ async fn wait_db_failed(rx: &mut tokio::sync::watch::Receiver<DbState>) {
     }
 }
 
-async fn init_db_and_embedder(config: &Config) -> Result<DbReady> {
+async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<DbReady> {
     let t_init = std::time::Instant::now();
     mlog!("tyto: opening database...");
     let db = Db::open(config).await?;
     let conn = Arc::new(db.conn);
+    let handle = db.handle;
+    let temp_dir = db.temp_dir;
 
     // In replica mode, compact any stale WAL from the previous session before
     // running migrations. A dirty WAL can hide tables that exist in Turso,
     // causing spurious "no such table" errors on reads that immediately follow
     // the sync. Checkpointing merges the WAL into the main db file so the
     // post-sync snapshot is the authoritative starting state.
-    // Runs after sync (inside open_replica_with_recovery) has completed, so
-    // there is no concurrent sync to conflict with.
-    if matches!(config.memory.storage.remote_mode, RemoteMode::Replica) {
+    //
+    // GOTCHA: We use sync_db.checkpoint() instead of 'PRAGMA wal_checkpoint' because 
+    // Turso's .execute() fails on pragmas that return rows.
+    if let db::AnyDb::Synced(ref sync_db) = handle {
         let t_cp = std::time::Instant::now();
-        match conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").await {
+        match sync_db.checkpoint().await {
             Ok(_) => tracing::debug!(elapsed_ms = t_cp.elapsed().as_millis(), "WAL checkpoint"),
             Err(e) => mlog!("tyto: WAL checkpoint failed (non-fatal): {e:#}"),
         }
@@ -1257,25 +1322,25 @@ async fn init_db_and_embedder(config: &Config) -> Result<DbReady> {
     // In replica mode, a stale WAL from a previous session can overlay the main
     // db file after sync, causing "no such table" for tables that exist in Turso.
     // Purge and re-open once to force a clean full re-sync.
-    let conn = if let Err(ref e) = mig_result {
+    let (conn, handle, temp_dir) = if let Err(ref e) = mig_result {
         let is_replica = matches!(
             config.memory.storage.remote_mode,
             RemoteMode::Replica
         );
         if is_replica {
-            mlog!("tyto: migration failed in replica mode ({e:#}), purging local replica and retrying...");
+            mlog!("tyto: CRITICAL: migration failed in replica mode ({e:#}). PURGING local replica to force clean resync...");
             drop(conn);
             db::purge_replica_files(&config.db_path())?;
             let db = Db::open(config).await?;
             let conn = Arc::new(db.conn);
             mlog!("tyto: running migrations (retry)...");
             migrations::run(&conn).await?;
-            conn
+            (conn, db.handle, db.temp_dir)
         } else {
             return Err(mig_result.unwrap_err());
         }
     } else {
-        conn
+        (conn, handle, temp_dir)
     };
 
     mlog!("tyto: loading embedding model (first run will download ~22MB)...");
@@ -1284,12 +1349,40 @@ async fn init_db_and_embedder(config: &Config) -> Result<DbReady> {
     tracing::debug!(elapsed_ms = t_model.elapsed().as_millis(), "embedder load");
     tracing::debug!(elapsed_ms = t_init.elapsed().as_millis(), "init_db_and_embedder total");
 
+    // Start manual background sync for replicas.
+    if let db::AnyDb::Synced(ref sync_db) = handle {
+        let sync_db = sync_db.clone();
+        let write_lock_clone = Arc::clone(&write_lock);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                // Periodic push/pull/checkpoint to stay in sync and keep WAL small.
+                //
+                // GOTCHA: We must use the write_lock to ensure sync doesn't overlap with local 
+                // mutations. Even with a single process, Limbo's sync engine can panic 
+                // (e.g., "parent should have a rightmost pointer") if remote frames are applied 
+                // while the B-Tree is being modified locally.
+                let _guard = write_lock_clone.lock().await;
+                if let Err(e) = sync_db.push().await {
+                    tracing::error!(error = %e, "replica push failed");
+                }
+                if let Err(e) = sync_db.pull().await {
+                    tracing::error!(error = %e, "replica pull failed");
+                }
+                if let Err(e) = sync_db.checkpoint().await {
+                    tracing::error!(error = %e, "replica checkpoint failed");
+                }
+            }
+        });
+    }
+
     // Re-embed any memories whose vectors were generated by a different model.
     // Runs in background; inject (BM25-only) and search (model-filtered) degrade
     // gracefully while this is in progress.
     tokio::spawn(reembed_stale(Arc::clone(&conn), Arc::clone(&embedder)));
 
-    Ok(DbReady { conn, embedder })
+    Ok(DbReady { conn, embedder, write_lock, handle, temp_dir })
 }
 
 async fn shutdown_signal() {

@@ -27,6 +27,11 @@ pub async fn call_search(config: &Config, query: &str, limit: usize) -> Option<S
     call_tool_on_server(config, "search", Some(&args)).await.ok().flatten()
 }
 
+/// Call the `session_context` tool on the running serve instance.
+pub async fn call_session_context(config: &Config) -> Option<String> {
+    call_tool_on_server(config, "session_context", None).await.ok().flatten()
+}
+
 /// Connect to the running serve instance, call one tool, and return the text output.
 /// Returns Ok(None) when serve is not running or the socket is unreachable.
 pub async fn call_tool_on_server(

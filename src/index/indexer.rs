@@ -1,6 +1,5 @@
 use anyhow::Result;
 use chrono::Utc;
-use libsql::params;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -47,7 +46,7 @@ pub struct IndexResult {
 /// Runs in a Tokio blocking task per file to avoid starving the async runtime.
 pub async fn run(
     project_root: PathBuf,
-    conn: Arc<libsql::Connection>,
+    conn: Arc<turso::Connection>,
     embedder: Arc<Mutex<Embedder>>,
     git_history: bool,
     extra_excludes: Vec<String>,
@@ -58,7 +57,8 @@ pub async fn run(
     crate::mlog!("index: scanning {}", project_root.display());
     let files: Vec<(PathBuf, Lang)> = {
         let root = project_root.clone();
-        tokio::task::spawn_blocking(move || collect_files(&root, &extra_excludes)).await??
+        let excludes = extra_excludes.clone();
+        tokio::task::spawn_blocking(move || collect_files(&root, &excludes)).await??
     };
 
     result.files_scanned = files.len();
@@ -148,13 +148,14 @@ fn collect_files(root: &Path, extra_excludes: &[String]) -> Result<Vec<(PathBuf,
 }
 
 /// Remove all index data for a deleted file.
-pub(crate) async fn remove_file(conn: &libsql::Connection, project_root: &Path, file_path: &Path) -> Result<()> {
+pub(crate) async fn remove_file(conn: &Arc<turso::Connection>, project_root: &Path, file_path: &Path) -> Result<()> {
     let rel_path = file_path.strip_prefix(project_root)
         .unwrap_or(file_path)
         .to_string_lossy()
         .to_string();
-    conn.execute("DELETE FROM index_chunks WHERE file_path = ?1", libsql::params![rel_path.clone()]).await?;
-    conn.execute("DELETE FROM index_files WHERE path = ?1", libsql::params![rel_path]).await?;
+    
+    conn.execute("DELETE FROM index_chunks WHERE file_path = ?1", (rel_path.clone(),)).await?;
+    conn.execute("DELETE FROM index_files WHERE path = ?1", (rel_path,)).await?;
     Ok(())
 }
 
@@ -163,7 +164,7 @@ pub(crate) async fn index_file(
     project_root: &Path,
     file_path: &Path,
     lang: &Lang,
-    conn: &libsql::Connection,
+    conn: &Arc<turso::Connection>,
     embedder: &Arc<Mutex<Embedder>>,
     git_history: bool,
 ) -> Result<usize> {
@@ -177,23 +178,18 @@ pub(crate) async fn index_file(
         .to_string();
 
     // Check if file hash has changed
-    let stored_hash: Option<String> = {
-        let mut rows = conn.query(
-            "SELECT content_hash FROM index_files WHERE path = ?1",
-            params![rel_path.clone()],
-        ).await?;
-        rows.next().await?.and_then(|r| r.get::<String>(0).ok())
-    };
+    let mut rows = conn.query(
+        "SELECT content_hash FROM index_files WHERE path = ?1",
+        (rel_path.clone(),),
+    ).await?;
+    let stored_hash: Option<String> = rows.next().await?.map(|r| r.get(0)).transpose()?;
 
     if stored_hash.as_deref() == Some(&content_hash) {
         return Ok(0); // unchanged
     }
 
     // Delete old chunks for this file (CASCADE removes vectors and FTS entries)
-    conn.execute(
-        "DELETE FROM index_chunks WHERE file_path = ?1",
-        params![rel_path.clone()],
-    ).await?;
+    conn.execute("DELETE FROM index_chunks WHERE file_path = ?1", (rel_path.clone(),)).await?;
 
     // Parse in blocking thread (tree-sitter is synchronous, CPU-bound)
     let source_clone = source.clone();
@@ -226,12 +222,12 @@ pub(crate) async fn index_file(
     for commit in &commits {
         let _ = conn.execute(
             "INSERT OR IGNORE INTO index_commits (sha, message) VALUES (?1, ?2)",
-            params![commit.sha.clone(), commit.message.clone()],
+            (commit.sha.clone(), commit.message.clone()),
         ).await;
     }
 
     let now = Utc::now().to_rfc3339();
-    let model_id = embed::model_id();
+    let model_id = crate::embed::model_id();
     let mut stored = 0usize;
 
     for chunk in &chunks {
@@ -252,37 +248,27 @@ pub(crate) async fn index_file(
               doc_comment, body_preview, line_start, line_end, language, \
               churn_count, hotspot_score, indexed_at, content_hash) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
-            params![
-                chunk_id.clone(),
-                rel_path.clone(),
-                chunk.symbol_name.clone(),
-                chunk.qualified_name.clone(),
-                chunk.symbol_kind.clone(),
-                chunk.signature.clone(),
-                chunk.doc_comment.clone(),
-                chunk.body_preview.clone(),
-                chunk.line_start as i64,
-                chunk.line_end as i64,
-                lang_name.clone(),
-                churn_count,
-                hotspot_score,
-                now.clone(),
-                chunk_hash,
-            ],
+            (
+                chunk_id.clone(), rel_path.clone(), chunk.symbol_name.clone(),
+                chunk.qualified_name.clone(), chunk.symbol_kind.clone(),
+                chunk.signature.clone(), chunk.doc_comment.clone(),
+                chunk.body_preview.clone(), chunk.line_start as i64,
+                chunk.line_end as i64, lang_name.clone(), churn_count,
+                hotspot_score, now.clone(), chunk_hash.clone()
+            ),
         ).await?;
 
         conn.execute(
             "INSERT OR REPLACE INTO index_vectors (chunk_id, embed_model, embedding) \
              VALUES (?1, ?2, ?3)",
-            params![chunk_id.clone(), model_id.clone(), blob],
+            (chunk_id.clone(), model_id.clone(), blob),
         ).await?;
 
-        // Link chunk to the already-fetched commits
         for commit in &commits {
             let _ = conn.execute(
                 "INSERT OR IGNORE INTO index_chunk_commits (chunk_id, commit_sha) \
                  VALUES (?1, ?2)",
-                params![chunk_id.clone(), commit.sha.clone()],
+                (chunk_id.clone(), commit.sha.clone()),
             ).await;
         }
 
@@ -294,12 +280,12 @@ pub(crate) async fn index_file(
     Ok(stored)
 }
 
-async fn upsert_file_hash(conn: &libsql::Connection, path: &str, hash: &str) -> Result<()> {
+async fn upsert_file_hash(conn: &Arc<turso::Connection>, path: &str, hash: &str) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT OR REPLACE INTO index_files (path, content_hash, indexed_at) \
          VALUES (?1, ?2, ?3)",
-        params![path.to_string(), hash.to_string(), now],
+        (path.to_string(), hash.to_string(), now),
     ).await?;
     Ok(())
 }

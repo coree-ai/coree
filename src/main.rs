@@ -21,8 +21,6 @@ enum Command {
     Inject {
         #[arg(long, default_value = "prompt", help = "Injection type: prompt | session | stop | compact")]
         r#type: String,
-        #[arg(long, help = "Override project ID")]
-        project: Option<String>,
         #[arg(long, help = "Explicit query string (prompt type only)")]
         query: Option<String>,
         #[arg(long, default_value_t = 5)]
@@ -85,9 +83,9 @@ async fn main() -> Result<()> {
             let config = Config::load(start)?;
             serve::run(config).await?;
         }
-        Command::Inject { r#type, project, query, limit, budget } => {
+        Command::Inject { r#type, query, limit, budget } => {
             tyto::log::init_tracing();
-            if let Err(e) = inject::run(&r#type, project, query, limit, budget).await {
+            if let Err(e) = inject::run(&r#type, query, limit, budget).await {
                 eprintln!("tyto inject error: {e}");
             }
         }
