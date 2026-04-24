@@ -183,9 +183,10 @@ In our multi-agent/multi-process architecture, a primary `tyto serve` process ty
 ### The Solution: Primary-Only Initialization
 We implemented a two-tier fix:
 1.  **Handover Robustness**: Increased replica build retries in `src/db.rs` to 20 attempts (~5s) to allow a previous process to fully exit during a restart.
-2.  **Primary/Secondary Split**: Updated `src/serve.rs` to implement a 5-second wait for `serve.lock`. 
-    -   **Primary**: Acquires the lock, initializes the database, and starts the IPC socket.
-    -   **Secondary**: Fails to acquire the lock after 5s, skips database initialization entirely, and enters a permanent `Syncing` state. This prevents locking conflicts while allowing the MCP server to start and respond to agents.
+2.  **Background Leader Election**: Refactored `src/serve.rs` to use a background task for lock acquisition. 
+    -   **Polling**: All processes start the MCP transport immediately but poll `serve.lock` every second.
+    -   **Primary**: The first process to acquire the lock initializes the database, indexer, and IPC socket.
+    -   **Handover**: If a primary process exits, another running `serve` instance will automatically acquire the lock and take over as the primary (promoting itself from `Syncing` to `Ready`). This ensures the database is always managed by exactly one process without manual intervention.
 
 ---
 
