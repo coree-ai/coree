@@ -23,6 +23,12 @@ pub async fn ensure(conn: &Arc<turso::Connection>) -> Result<()> {
     // GOTCHA: Limbo's parser does not yet support 'WITHOUT ROWID' tables. SQLite's FTS5 
     // extension uses WITHOUT ROWID for its internal shadow tables, making FTS5 databases 
     // unreadable by Limbo. We switch to Turso's native 'USING fts' which is Limbo-compatible.
+    // Keys must match the actual DB object name (table or index name) because we
+    // query sqlite_schema by name to check existence before attempting DDL.
+    // GOTCHA: Limbo can return a false "already exists" error for CREATE TABLE IF NOT
+    // EXISTS even when the table does not exist. Catching that error would silently
+    // skip creation; a downstream CREATE INDEX then fails with "table does not exist".
+    // Pre-checking sqlite_schema avoids the false-positive swallow entirely.
     let ddl = [
         ("index_files", "CREATE TABLE IF NOT EXISTS index_files (
              path        TEXT PRIMARY KEY,
@@ -46,7 +52,7 @@ pub async fn ensure(conn: &Arc<turso::Connection>) -> Result<()> {
              indexed_at     TEXT NOT NULL,
              content_hash   TEXT NOT NULL
          )"),
-        ("index_chunks_file_idx", "CREATE INDEX IF NOT EXISTS index_chunks_file ON index_chunks (file_path)"),
+        ("index_chunks_file", "CREATE INDEX IF NOT EXISTS index_chunks_file ON index_chunks (file_path)"),
         ("index_vectors", "CREATE TABLE IF NOT EXISTS index_vectors (
              chunk_id    TEXT NOT NULL REFERENCES index_chunks(id) ON DELETE CASCADE,
              embed_model TEXT NOT NULL,
@@ -65,20 +71,28 @@ pub async fn ensure(conn: &Arc<turso::Connection>) -> Result<()> {
              commit_sha TEXT NOT NULL REFERENCES index_commits(sha) ON DELETE CASCADE,
              PRIMARY KEY (chunk_id, commit_sha)
          )"),
-        ("index_chunk_commits_idx", "CREATE INDEX IF NOT EXISTS index_chunk_commits_by_sha ON index_chunk_commits (commit_sha)"),
+        ("index_chunk_commits_by_sha", "CREATE INDEX IF NOT EXISTS index_chunk_commits_by_sha ON index_chunk_commits (commit_sha)"),
     ];
 
     for (name, stmt) in ddl {
-        if let Err(e) = conn.execute(stmt, ()).await {
-            let msg = e.to_string();
-            // Limbo sometimes returns "already exists" even with IF NOT EXISTS.
-            if msg.contains("already exists") {
-                tracing::trace!(ddl = %name, "index schema item already exists");
-                continue;
-            }
-            return Err(e).context(format!("Failed to execute DDL for {}: {}", name, stmt));
+        // Check sqlite_schema first to avoid Limbo's false "already exists" bug.
+        let already_exists: bool = {
+            let mut rows = conn.query(
+                "SELECT count(*) FROM sqlite_schema WHERE name = ?1",
+                (name.to_string(),),
+            ).await.unwrap_or_else(|_| unreachable!());
+            rows.next().await
+                .ok().flatten()
+                .and_then(|r| r.get::<i64>(0).ok())
+                .unwrap_or(0) > 0
+        };
+        if already_exists {
+            tracing::trace!(ddl = %name, "index schema item already exists");
+            continue;
         }
-        tracing::trace!(ddl = %name, "index schema item ensured");
+        conn.execute(stmt, ()).await
+            .context(format!("Failed to execute DDL for {}: {}", name, stmt))?;
+        tracing::trace!(ddl = %name, "index schema item created");
     }
 
     Ok(())
