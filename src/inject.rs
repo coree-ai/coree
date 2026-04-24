@@ -4,7 +4,7 @@ use std::env;
 use std::io::{IsTerminal, Read};
 use turso::Connection;
 
-use crate::{config::Config, db::Db, migrations, project_id, request, retrieve};
+use crate::{config::Config, request, retrieve};
 
 const INSTRUCTIONS: &str = "[tyto] Store every decision, discovery, gotcha, failure, and unexpected outcome. \
 Err on the side of storing - use importance (0.0-1.0) to signal value, not omission. \
@@ -73,20 +73,8 @@ const LOADING_MESSAGE: &str =
         context for this session. If session_context returns a 'loading' message, \
         wait a few seconds and retry.";
 
-fn build_session_instructions(session_path: Option<&std::path::Path>) -> String {
-    match session_path {
-        None => String::new(),
-        Some(path) => format!(
-            "[tyto] Session start — BEFORE responding to the user, read this file \
-             completely and execute every instruction defined in it: {}\n",
-            path.display()
-        ),
-    }
-}
-
 pub async fn run(
     inject_type: &str,
-    project_override: Option<String>,
     query_override: Option<String>,
     limit: usize,
     budget: usize,
@@ -96,7 +84,7 @@ pub async fn run(
         return run_stop(budget);
     }
 
-    if let Err(e) = run_inner(inject_type, project_override, query_override, limit, budget).await {
+    if let Err(e) = run_inner(inject_type, query_override, limit, budget).await {
         println!(
             "[tyto] CRITICAL: Memory system unavailable - memories were NOT loaded for this \
              session and storing new memories will fail. Inform the user of this immediately \
@@ -108,7 +96,6 @@ pub async fn run(
 
 async fn run_inner(
     inject_type: &str,
-    project_override: Option<String>,
     query_override: Option<String>,
     limit: usize,
     budget: usize,
@@ -168,10 +155,10 @@ async fn run_inner(
     // than falling through to direct DB access, because direct access will hit
     // a locking conflict on the replica file and trigger slow retries/purges.
     let mut state = serve_state(&config);
-    if matches!(state, ServeState::Loading) {
+    if matches!(inject_type, "session" | "compact") && matches!(state, ServeState::Loading) {
         let t_wait = std::time::Instant::now();
-        // Wait up to 10 seconds for the server to finish starting (model download, sync).
-        while t_wait.elapsed() < std::time::Duration::from_secs(10) {
+        // Worth a short wait so the agent gets real memory context at session start.
+        while t_wait.elapsed() < std::time::Duration::from_secs(3) {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             state = serve_state(&config);
             if matches!(state, ServeState::Ready) {
@@ -216,7 +203,6 @@ async fn run_inner(
                      Use search_memory / list_memories for context retrieval this session."
                 );
             }
-            return Ok(());
         }
         ServeState::Loading => {
             // Only session/compact hooks tell the agent about the loading state.
@@ -225,46 +211,15 @@ async fn run_inner(
             if inject_type == "session" || inject_type == "compact" {
                 println!("{LOADING_MESSAGE}");
             }
-            return Ok(());
         }
-        ServeState::NotRunning => {} // fall through to direct DB access
-    }
-
-    let t_db = std::time::Instant::now();
-    let db = Db::open(&config).await?;
-    let conn = db.conn;
-    migrations::run(&conn).await?;
-    tracing::debug!(elapsed_ms = t_db.elapsed().as_millis(), "db open + migrations");
-
-    let pid = project_override
-        .unwrap_or_else(|| project_id::resolve(&config.project_root, config.project_id.as_deref()));
-
-    let result = match inject_type {
-        "session" | "compact" => run_session(&conn, &pid, budget).await,
-        _ => run_prompt(&conn, &prompt_query, &pid, limit, budget).await,
-    };
-    tracing::debug!(elapsed_ms = t_total.elapsed().as_millis(), inject_type, "inject total");
-    result
-}
-
-// Uses BM25-only search (no ONNX model) to stay within the 500ms hook timeout.
-// Prompt injection is best-effort context; keyword relevance is sufficient here.
-// Full hybrid search is reserved for session-start where latency tolerance is higher.
-async fn run_prompt(
-    conn: &Connection,
-    query: &str,
-    project_id: &str,
-    limit: usize,
-    budget: usize,
-) -> Result<()> {
-    let mut output = INSTRUCTIONS.to_string();
-    if !query.is_empty() {
-        let results = retrieve::search_bm25(conn, query, project_id, limit).await?;
-        if !results.is_empty() {
-            output.push_str(&crate::format::compact(&results, 0, None));
+        ServeState::NotRunning => {
+            if inject_type == "session" || inject_type == "compact" {
+                println!(
+                    "[tyto] tyto serve is not running. Please start tyto serve or restart your tyto plugin."
+                );
+            }
         }
     }
-    print_within_budget(&output, budget);
     Ok(())
 }
 
@@ -302,81 +257,6 @@ fn is_stop_hook_active() -> bool {
 }
 
 const FULL_CONTENT_BUDGET: usize = 30_000;
-
-async fn run_session(
-    conn: &Connection,
-    project_id: &str,
-    budget: usize,
-) -> Result<()> {
-    let pid = std::process::id();
-
-    let captures = query_pending_captures(conn, project_id).await?;
-
-    // List all memories above the importance floor sorted by retention score.
-    let results = retrieve::list(conn, project_id, None, &[], 500, 0.4).await?;
-
-    // Select IDs whose content fits within the full-content budget using the
-    // content_len from the compact query, then fetch only that subset.
-    let mut included_in_file = 0usize;
-    let mut memories_content = String::new();
-    if !results.is_empty() {
-        let mut accumulated = 0usize;
-        let full_ids: Vec<String> = results
-            .iter()
-            .take_while(|r| {
-                if accumulated >= FULL_CONTENT_BUDGET {
-                    return false;
-                }
-                accumulated += r.content_len;
-                true
-            })
-            .map(|r| r.id.clone())
-            .collect();
-
-        if !full_ids.is_empty() {
-            let full_memories = retrieve::get_full_batch(conn, &full_ids, project_id).await?;
-            let full_map: std::collections::HashMap<String, retrieve::FullMemory> =
-                full_memories.into_iter().map(|m| (m.id.clone(), m)).collect();
-
-            for (i, compact) in results.iter().enumerate() {
-                if let Some(mem) = full_map.get(&compact.id) {
-                    memories_content.push_str(&format_full_memory(mem));
-                    included_in_file = i + 1;
-                } else {
-                    break;
-                }
-            }
-        }
-    }
-
-    // Write a single session file when either section has content.
-    // Write before marking captures presented so a write failure leaves them unpresented.
-    let session_path = if !captures.is_empty() || !memories_content.is_empty() {
-        let path = std::env::temp_dir().join(format!("tyto-session-{pid}.txt"));
-        std::fs::write(&path, format_session_file(&captures, &memories_content))?;
-        if !captures.is_empty() {
-            mark_captures_presented(conn, project_id).await?;
-        }
-        Some(path)
-    } else {
-        None
-    };
-
-    // Build stdout: single file instruction + compact index.
-    // Only memories not already written to the session file appear in the compact index.
-    let mut output = INSTRUCTIONS.to_string();
-    output.push_str(&build_session_instructions(session_path.as_deref()));
-    if !results.is_empty() {
-        output.push_str(&crate::format::compact(
-            &results[included_in_file..],
-            included_in_file,
-            session_path.as_deref(),
-        ));
-    }
-
-    print_within_budget(&output, budget);
-    Ok(())
-}
 
 struct PendingCapture {
     tool_name: String,
@@ -420,80 +300,6 @@ async fn mark_captures_presented(conn: &Connection, project_id: &str) -> Result<
     Ok(())
 }
 
-fn format_session_file(captures: &[PendingCapture], memories_content: &str) -> String {
-    let mut out = String::from(
-        "MANDATORY PROCESS — VIOLATION IF SKIPPED.\n\
-         These instructions exist to restore project context so your response is accurate, \
-         relevant, and high-quality. Skipping them means responding without critical background \
-         knowledge, which produces worse answers. The user knows this step happens first and \
-         expects it.\n\n\
-         Before writing any response to the user, you must:\n\
-         1. Read this file completely, from top to bottom.\n\
-         2. Execute every instruction in it.\n\n\
-         Your first output line must be exactly: [tyto: init]\n\
-         This is required even if the user's request is trivial or urgent.\n\
-         Skipping, abbreviating, or deferring any part of this is a critical process violation \
-         that directly harms the quality of your response.\n\n",
-    );
-
-    // Section 1: Raw captures
-    out.push_str("=== SECTION 1: RAW CAPTURES ===\n");
-    if captures.is_empty() {
-        out.push_str("(none)\n");
-    } else {
-        out.push_str(&format!(
-            "{} captures from previous session activity.\n\
-             Read ALL entries together. Store memories only for non-obvious discoveries:\n\
-             - Bugs/failures: type=gotcha, importance>=0.8, source='reviewed'\n\
-             - Other findings: appropriate type, source='reviewed'\n\
-             - Routine edits/builds with no finding: no memory needed\n\n\
-             --- Captures ---\n",
-            captures.len()
-        ));
-        for c in captures {
-            let date = c.captured_at.get(..10).unwrap_or(&c.captured_at);
-            out.push_str(&format!("[{:<12}] {}  {}\n", c.tool_name, date, c.summary));
-        }
-        out.push_str("---\n");
-    }
-    out.push_str("=== END SECTION 1 ===\n");
-    if captures.is_empty() {
-        out.push_str(
-            "Instruction: output exactly \"No raw captures to process from last session.\"\n\n",
-        );
-    } else {
-        out.push_str(
-            "Instruction: store memories for any non-obvious discoveries above \
-             (source='reviewed'), then output a one-sentence summary: \
-             \"Captures: [what was found and stored, or 'nothing worth storing']\"\n\n",
-        );
-    }
-
-    // Section 2: Prior memories
-    out.push_str("=== SECTION 2: PRIOR MEMORIES ===\n");
-    if memories_content.is_empty() {
-        out.push_str("(none)\n");
-    } else {
-        out.push_str(memories_content);
-    }
-    out.push_str("=== END SECTION 2 ===\n");
-    if memories_content.is_empty() {
-        out.push_str("Instruction: output exactly \"No prior memories for this project.\"\n");
-    } else {
-        out.push_str(
-            "Instruction: output a one-sentence summary of the most important context \
-             restored: \"Memories: [key context]\"\n",
-        );
-    }
-
-    out
-}
-
-/// Format session content for the `session_context` MCP tool return value.
-/// Unlike `format_session_file` (which is injected at operator/system-prompt level),
-/// tool results are processed as external data. Commanding language ("MANDATORY PROCESS",
-/// "VIOLATION IF SKIPPED") in tool results reads as prompt injection to model safety
-/// training. This function presents the same data in a neutral, informational format.
 fn format_tool_session_content(captures: &[PendingCapture], memories_content: &str) -> String {
     let mut out = String::new();
 

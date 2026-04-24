@@ -264,22 +264,3 @@ async fn topic_key_upsert_updates_content() {
         .unwrap();
     assert_eq!(mem.content, "Updated content");
 }
-
-#[tokio::test]
-async fn store_keyword_search_finds_by_word() {
-    let db = setup().await;
-    let lock = new_write_lock();
-
-    let mut req = basic_request("rustaceans love ownership and borrowing");
-    req.title = "Rust ownership".to_string();
-    tyto::store::store_memory(&db.conn, dummy_embedding(), &lock, req, 30)
-        .await
-        .unwrap();
-
-    let results = tyto::retrieve::search_bm25(&db.conn, "ownership", "test-project", 5)
-        .await
-        .unwrap();
-
-    assert!(!results.is_empty(), "keyword search should find the stored memory");
-    assert!(results.iter().any(|r| r.title == "Rust ownership"));
-}

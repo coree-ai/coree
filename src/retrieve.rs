@@ -359,56 +359,6 @@ pub async fn delete_batch(conn: &Connection, ids: &[String], project_id: &str) -
     Ok(conn.execute(&sql, params_from_iter(params)).await?)
 }
 
-/// Keyword-only search: no embedding required. Fallback for FTS5.
-pub async fn search_bm25(
-    conn: &Connection,
-    query: &str,
-    project_id: &str,
-    limit: usize,
-) -> Result<Vec<CompactResult>> {
-    let now = Utc::now();
-    let kw_query = format!("%{}%", like_escape(query));
-    let mut rows = conn
-        .query(
-            "SELECT m.id, m.type, m.title, m.created_at, m.importance,
-                    m.access_count, m.last_accessed, m.source, length(m.content), m.facts, m.tags
-             FROM memories m
-             WHERE (m.title LIKE ?1 ESCAPE '\\' OR m.content LIKE ?1 ESCAPE '\\' OR m.facts LIKE ?1 ESCAPE '\\')
-               AND m.project_id = ?2
-               AND m.status = 'active'
-             LIMIT ?3",
-            (kw_query, project_id.to_string(), limit as i64),
-        )
-        .await?;
-
-    let mut results: Vec<CompactResult> = Vec::new();
-    while let Some(row) = rows.next().await? {
-        let memory_type: String = row.get(1)?;
-        let created_at: String = row.get(3)?;
-        let importance: f64 = row.get(4)?;
-        let access_count: i64 = row.get(5)?;
-        let last_accessed: Option<String> = row.get(6).ok();
-        let source: String = row.get(7).unwrap_or_else(|_| "realtime".to_string());
-        let content_len: i64 = row.get(8).unwrap_or(0);
-        let facts_json: Option<String> = row.get(9).ok();
-        let tags_json: Option<String> = row.get(10).ok();
-        let days = days_since(last_accessed.as_deref().unwrap_or(&created_at), &now);
-        results.push(CompactResult {
-            id: row.get(0)?,
-            title: row.get(2)?,
-            created_at,
-            score: retention_score(&memory_type, importance, days, access_count, &source),
-            importance,
-            memory_type,
-            content_len: content_len as usize,
-            facts_json,
-            tags_json,
-        });
-    }
-
-    Ok(results)
-}
-
 pub async fn list(
     conn: &Connection,
     project_id: &str,
