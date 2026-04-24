@@ -168,23 +168,33 @@ async fn run_watchers(
     });
 
     let git_handle = tokio::spawn(async move {
-        if git_watcher.is_none() {
-            // No .git dir — park until cancelled.
+        // Keep git_watcher alive so the notify thread runs and feeds git_rx.
+        let _git_watcher = git_watcher;
+        if _git_watcher.is_none() {
+            // No .git dir -- park until cancelled.
             std::future::pending::<()>().await;
             return;
         }
+        // Use try_recv() with an interval so this task stays cancellable at
+        // .await points. std::sync::mpsc::recv() would block a Tokio worker
+        // thread, preventing runtime shutdown.
+        let mut interval = tokio::time::interval(DRAIN_INTERVAL);
         loop {
-            match git_rx.recv() {
-                Ok(Ok(event)) => {
-                    if !is_commit_editmsg_event(&event) {
-                        continue;
+            interval.tick().await;
+            loop {
+                match git_rx.try_recv() {
+                    Ok(Ok(event)) => {
+                        if !is_commit_editmsg_event(&event) {
+                            continue;
+                        }
+                        if let Err(e) = handle_new_commit(&root_git, &conn_git, git_history).await {
+                            crate::mlog!("tyto: commit index error: {e:#}");
+                        }
                     }
-                    if let Err(e) = handle_new_commit(&root_git, &conn_git, git_history).await {
-                        crate::mlog!("tyto: commit index error: {e:#}");
-                    }
+                    Ok(Err(_)) => continue,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                 }
-                Ok(Err(_)) => continue,
-                Err(_) => return, // sender dropped
             }
         }
     });
