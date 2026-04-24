@@ -1007,18 +1007,30 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     if let Some(parent) = lock_file_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    // Try to acquire the exclusive lock non-blocking. If another instance already
-    // holds it, continue as a secondary: start the MCP transport normally so
-    // Claude Code connects successfully, but skip state-file management and the
-    // code indexer (the primary handles those).
+    
+    // Try to acquire the exclusive lock. If another instance already holds it, 
+    // we wait briefly (5s) for it to be released (handover during restart).
+    // If still held, continue as a secondary.
     let lock_file = std::fs::OpenOptions::new()
         .write(true).create(true).truncate(false)
         .open(&lock_file_path)
         .map_err(|e| anyhow::anyhow!("Failed to open serve.lock: {e}"))?;
-    let is_primary = match fs4::FileExt::try_lock(&lock_file) {
-        Ok(()) => { mlog!("tyto: acquired serve.lock (primary)"); true }
-        _ => { mlog!("tyto: serve.lock held by another process, starting as secondary"); false }
-    };
+
+    let mut is_primary = false;
+    let start_lock = std::time::Instant::now();
+    while start_lock.elapsed() < std::time::Duration::from_secs(5) {
+        if fs4::FileExt::try_lock(&lock_file).is_ok() {
+            mlog!("tyto: acquired serve.lock (primary)");
+            is_primary = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+
+    if !is_primary {
+        mlog!("tyto: serve.lock held by another process, starting as secondary (proxy mode)");
+    }
+
     // Keep lock_file alive until end of function; drop releases the lock if held.
 
     let session_id = Uuid::new_v4().to_string();
@@ -1047,68 +1059,77 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     let config_for_idx = config.clone();
     let db_tx_clone = db_tx.clone();
     let idx_tx_clone = idx_tx.clone();
-    tokio::spawn(async move {
-        match init_db_and_embedder(&config).await {
-            Ok(ready) => {
-                let embedder_for_idx = Arc::clone(&ready.embedder);
-                let _ = db_tx_clone.send(DbState::Ready(Arc::new(ready)));
-                if is_primary {
+    
+    if is_primary {
+        tokio::spawn(async move {
+            match init_db_and_embedder(&config).await {
+                Ok(ready) => {
+                    let embedder_for_idx = Arc::clone(&ready.embedder);
+                    let _ = db_tx_clone.send(DbState::Ready(Arc::new(ready)));
                     let _ = std::fs::write(&ready_file_bg, "");
-                }
-                mlog!("tyto: database ready");
+                    mlog!("tyto: database ready");
 
-                // Only the primary instance manages the code indexer.
-                use crate::config::StorageMode;
-                let index_enabled = is_primary && !matches!(config_for_idx.index.storage.mode, StorageMode::Disabled);
-                if index_enabled {
-                    let db_path = config_for_idx.index_db_path();
-                    let project_root = config_for_idx.project_root.clone();
-                    let git_history = config_for_idx.index.git_history;
-                    let extra_excludes = config_for_idx.index.exclude.clone();
-                    tokio::spawn(async move {
-                        mlog!("tyto: opening code index at {}", db_path.display());
-                        match index::open(&db_path, project_root.clone(), git_history, Arc::clone(&embedder_for_idx)).await {
-                            Ok(idx_ready) => {
-                                let idx_ready = Arc::new(idx_ready);
-                                let _ = idx_tx_clone.send(index::IndexState::Ready(Arc::clone(&idx_ready)));
-                                mlog!("tyto: code index ready, starting background indexing...");
-                                let conn = Arc::clone(&idx_ready.conn);
-                                let emb = Arc::clone(&embedder_for_idx);
-                                match index::indexer::run(project_root.clone(), conn.clone(), emb.clone(), git_history, extra_excludes.clone()).await {
-                                    Ok(r) => mlog!(
-                                        "tyto: code index complete — {} files, {} chunks",
-                                        r.files_indexed, r.chunks_stored
-                                    ),
-                                    Err(e) => mlog!("tyto: code index run failed: {e:#}"),
+                    // Only the primary instance manages the code indexer.
+                    use crate::config::StorageMode;
+                    let index_enabled = !matches!(config_for_idx.index.storage.mode, StorageMode::Disabled);
+                    if index_enabled {
+                        let db_path = config_for_idx.index_db_path();
+                        let project_root = config_for_idx.project_root.clone();
+                        let git_history = config_for_idx.index.git_history;
+                        let extra_excludes = config_for_idx.index.exclude.clone();
+                        tokio::spawn(async move {
+                            mlog!("tyto: opening code index at {}", db_path.display());
+                            match index::open(&db_path, project_root.clone(), git_history, Arc::clone(&embedder_for_idx)).await {
+                                Ok(idx_ready) => {
+                                    let idx_ready = Arc::new(idx_ready);
+                                    let _ = idx_tx_clone.send(index::IndexState::Ready(Arc::clone(&idx_ready)));
+                                    mlog!("tyto: code index ready, starting background indexing...");
+                                    let conn = Arc::clone(&idx_ready.conn);
+                                    let emb = Arc::clone(&embedder_for_idx);
+                                    match index::indexer::run(project_root.clone(), conn.clone(), emb.clone(), git_history, extra_excludes.clone()).await {
+                                        Ok(r) => mlog!(
+                                            "tyto: code index complete — {} files, {} chunks",
+                                            r.files_indexed, r.chunks_stored
+                                        ),
+                                        Err(e) => mlog!("tyto: code index run failed: {e:#}"),
+                                    }
+                                    let watcher_lock = config_for_idx.index_watcher_lock_path();
+                                    index::watcher::start(
+                                        watcher_lock,
+                                        project_root,
+                                        conn,
+                                        emb,
+                                        git_history,
+                                        extra_excludes,
+                                    );
                                 }
-                                let watcher_lock = config_for_idx.index_watcher_lock_path();
-                                index::watcher::start(
-                                    watcher_lock,
-                                    project_root,
-                                    conn,
-                                    emb,
-                                    git_history,
-                                    extra_excludes,
-                                );
+                                Err(e) => {
+                                    mlog!("tyto: code index open failed (continuing without indexing): {e:#}");
+                                    let _ = idx_tx_clone.send(index::IndexState::Disabled);
+                                }
                             }
-                            Err(e) => {
-                                mlog!("tyto: code index open failed (continuing without indexing): {e:#}");
-                                let _ = idx_tx_clone.send(index::IndexState::Disabled);
-                            }
-                        }
-                    });
-                } else {
+                        });
+                    } else {
+                        let _ = idx_tx_clone.send(index::IndexState::Disabled);
+                        mlog!("tyto: code indexing disabled in config");
+                    }
+                }
+                Err(e) => {
+                    mlog!("tyto: database init failed: {e:#}");
+                    let _ = db_tx_clone.send(DbState::Failed(format!("{e:#}")));
                     let _ = idx_tx_clone.send(index::IndexState::Disabled);
-                    mlog!("tyto: code indexing disabled in config");
                 }
             }
-            Err(e) => {
-                mlog!("tyto: database init failed: {e:#}");
-                let _ = db_tx_clone.send(DbState::Failed(format!("{e:#}")));
-                let _ = idx_tx_clone.send(index::IndexState::Disabled);
-            }
-        }
-    });
+        });
+    } else {
+        // Secondary processes do not open the database as they would conflict 
+        // with the primary in replica mode (which lacks multiprocess WAL).
+        // They stay in the Syncing state permanently, effectively acting as 
+        // proxies if tools are called, informing the user that initialization
+        // is being handled by another process.
+        let _ = db_tx_clone.send(DbState::Syncing);
+        let _ = idx_tx_clone.send(index::IndexState::Opening);
+    }
 
     // Start MCP transport immediately — Claude Code sees us as connected right away.
     // Tool calls during the sync window return a "syncing" message instead of blocking.

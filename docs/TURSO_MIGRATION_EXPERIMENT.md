@@ -169,9 +169,25 @@ conn.execute_batch(
 
 ---
 
----
+## Phase 7: Concurrency and Multi-process Finality
 
-## Appendix: Minimal Isolated Reproduction
+### The Discovery: API Asymmetry
+While testing multi-process concurrency, we discovered a significant API asymmetry in Turso `0.6.0-pre.22`:
+-   **Local Mode** (`turso::Builder`): Supports `.experimental_multiprocess_wal(true)`, enabling multiple processes to access the same DB file safely.
+-   **Replica Mode** (`turso::sync::Builder`): **Does NOT** support this method. Synced replicas remain exclusive to a single process.
+
+### The Conflict: Secondary Processes
+In our multi-agent/multi-process architecture, a primary `tyto serve` process typically holds the lock on the replica. If a second process (like `tyto status` or a secondary `serve`) attempts to open the same replica, it fails with:
+`Locking error: Failed locking file... File is locked by another process`
+
+### The Solution: Primary-Only Initialization
+We implemented a two-tier fix:
+1.  **Handover Robustness**: Increased replica build retries in `src/db.rs` to 20 attempts (~5s) to allow a previous process to fully exit during a restart.
+2.  **Primary/Secondary Split**: Updated `src/serve.rs` to implement a 5-second wait for `serve.lock`. 
+    -   **Primary**: Acquires the lock, initializes the database, and starts the IPC socket.
+    -   **Secondary**: Fails to acquire the lock after 5s, skips database initialization entirely, and enters a permanent `Syncing` state. This prevents locking conflicts while allowing the MCP server to start and respond to agents.
+
+---
 
 To facilitate debugging and potentially report these issues to the Turso maintainers, we created a minimal reproduction script.
 
