@@ -38,6 +38,7 @@ use crate::{
 struct DbReady {
     conn: Arc<Connection>,
     embedder: Arc<Mutex<Embedder>>,
+    write_lock: WriteLock,
     #[allow(dead_code)]
     handle: db::AnyDb,
 }
@@ -1047,9 +1048,9 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
         }
 
         // Start local IPC socket so `tyto request` can reach the warm embedder/DB.
-        spawn_socket_listener(server_for_socket, &config_for_bg);
+        spawn_socket_listener(server_for_socket.clone(), &config_for_bg);
 
-        match init_db_and_embedder(&config_for_bg).await {
+        match init_db_and_embedder(&config_for_bg, Arc::clone(&server_for_socket.write_lock)).await {
             Ok(ready) => {
                 let embedder_for_idx = Arc::clone(&ready.embedder);
                 let _ = db_tx_clone.send(DbState::Ready(Arc::new(ready)));
@@ -1234,7 +1235,7 @@ async fn wait_db_failed(rx: &mut tokio::sync::watch::Receiver<DbState>) {
     }
 }
 
-async fn init_db_and_embedder(config: &Config) -> Result<DbReady> {
+async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<DbReady> {
     let t_init = std::time::Instant::now();
     mlog!("tyto: opening database...");
     let db = Db::open(config).await?;
@@ -1294,11 +1295,14 @@ async fn init_db_and_embedder(config: &Config) -> Result<DbReady> {
     // Start manual background sync for replicas.
     if let db::AnyDb::Synced(ref sync_db) = handle {
         let sync_db = sync_db.clone();
+        let write_lock_clone = Arc::clone(&write_lock);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
             loop {
                 interval.tick().await;
                 // Periodic push/pull/checkpoint to stay in sync and keep WAL small.
+                // We use the write_lock to ensure sync doesn't overlap with local mutations.
+                let _guard = write_lock_clone.lock().await;
                 if let Err(e) = sync_db.push().await {
                     tracing::error!(error = %e, "replica push failed");
                 }
@@ -1317,7 +1321,7 @@ async fn init_db_and_embedder(config: &Config) -> Result<DbReady> {
     // gracefully while this is in progress.
     tokio::spawn(reembed_stale(Arc::clone(&conn), Arc::clone(&embedder)));
 
-    Ok(DbReady { conn, embedder, handle })
+    Ok(DbReady { conn, embedder, write_lock, handle })
 }
 
 async fn shutdown_signal() {
