@@ -1103,8 +1103,8 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
                                 );
                             }
                             Err(e) => {
-                                mlog!("tyto: code index open failed (continuing without indexing): {e:#}");
-                                let _ = idx_tx_clone.send(index::IndexState::Disabled);
+                                mlog!("tyto: code index open failed: {e:#}");
+                                let _ = idx_tx_clone.send(index::IndexState::Failed(format!("{e:#}")));
                             }
                         }
                     });
