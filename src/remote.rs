@@ -215,6 +215,8 @@ async fn copy_memories(local: &Connection, remote: &Connection, total: i64) -> R
                      importance, access_count, last_accessed, pinned, status,
                      session_id, source, created_at, updated_at, content_hash)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+                // GOTCHA: The Turso Rust driver's IntoParams trait is only implemented for 
+                // tuples up to size 16. For this 18-column insert, we must use params_from_iter.
                 params_from_iter(vec![
                     Value::Text(row.get::<String>(0)?),
                     Value::Text(row.get::<String>(1)?),

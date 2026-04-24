@@ -1,9 +1,6 @@
 {
   "mcpServers": {},
   "hooksConfig": {
-    "disabled": [
-      "tyto-inject-session",
-      "tyto-inject-prompt"
-    ]
+    "disabled": []
   }
 }

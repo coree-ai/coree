@@ -4,7 +4,7 @@ use std::env;
 use std::io::{IsTerminal, Read};
 use turso::Connection;
 
-use crate::{config::{StorageMode, Config}, db::Db, migrations, project_id, request, retrieve};
+use crate::{config::Config, db::Db, migrations, project_id, request, retrieve};
 
 const INSTRUCTIONS: &str = "[tyto] Store every decision, discovery, gotcha, failure, and unexpected outcome. \
 Err on the side of storing - use importance (0.0-1.0) to signal value, not omission. \
@@ -162,12 +162,37 @@ async fn run_inner(
     // Socket delegation: if serve is ready, use its warm embedder for full hybrid search.
     // Checked before storage-mode branching - the socket is IPC to the serve process
     // and is independent of whether the backend is local SQLite or remote Turso.
-    if inject_type != "session" && inject_type != "compact"
-        && config.serve_ready_path().exists()
-        && !prompt_query.is_empty()
-    {
+    //
+    // GOTCHA: Synced replicas do not support multi-process concurrency.
+    // If the server is starting up (lock held but not ready), we WAIT here rather
+    // than falling through to direct DB access, because direct access will hit
+    // a locking conflict on the replica file and trigger slow retries/purges.
+    let mut state = serve_state(&config);
+    if matches!(state, ServeState::Loading) {
+        let t_wait = std::time::Instant::now();
+        // Wait up to 10 seconds for the server to finish starting (model download, sync).
+        while t_wait.elapsed() < std::time::Duration::from_secs(10) {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            state = serve_state(&config);
+            if matches!(state, ServeState::Ready) {
+                break;
+            }
+        }
+    }
+
+    if matches!(state, ServeState::Ready) {
         let t_ipc = std::time::Instant::now();
-        if let Some(results) = request::call_search(&config, &prompt_query, limit).await {
+        // For session/compact hooks, we request context injection.
+        // For prompt hooks, we only call if we have a query.
+        let result = if inject_type == "session" || inject_type == "compact" {
+            request::call_session_context(&config).await
+        } else if !prompt_query.is_empty() {
+            request::call_search(&config, &prompt_query, limit).await
+        } else {
+            None
+        };
+
+        if let Some(results) = result {
             tracing::debug!(
                 elapsed_ms = t_ipc.elapsed().as_millis(),
                 total_ms = t_total.elapsed().as_millis(),
@@ -180,32 +205,29 @@ async fn run_inner(
     }
 
     // If `tyto serve` is running locally, skip Db::open to avoid racing on the DB file.
-    // Not applicable for remote mode: Turso handles concurrent connections safely.
     // We distinguish Ready (tools work) from Loading (tools return "syncing") so we
     // can give the user accurate information about what is happening and what to expect.
-    if !matches!(config.memory.storage.mode, StorageMode::Remote) {
-        match serve_state(&config) {
-            ServeState::Ready => {
-                // Prompt type already handled above via socket delegation.
-                if inject_type == "session" || inject_type == "compact" {
-                    println!(
-                        "{INSTRUCTIONS}[tyto] MCP server is running — memory context is available via tools. \
-                         Use search_memory / list_memories for context retrieval this session."
-                    );
-                }
-                return Ok(());
+    match state {
+        ServeState::Ready => {
+            // Prompt type already handled above via socket delegation.
+            if inject_type == "session" || inject_type == "compact" {
+                println!(
+                    "{INSTRUCTIONS}[tyto] MCP server is running — memory context is available via tools. \
+                     Use search_memory / list_memories for context retrieval this session."
+                );
             }
-            ServeState::Loading => {
-                // Only session/compact hooks tell the agent about the loading state.
-                // Prompt hooks emit nothing — the agent already has instructions from
-                // the MCP server and there is no memory context to inject yet.
-                if inject_type == "session" || inject_type == "compact" {
-                    println!("{LOADING_MESSAGE}");
-                }
-                return Ok(());
-            }
-            ServeState::NotRunning => {} // fall through to direct DB access
+            return Ok(());
         }
+        ServeState::Loading => {
+            // Only session/compact hooks tell the agent about the loading state.
+            // Prompt hooks emit nothing — the agent already has instructions from
+            // the MCP server and there is no memory context to inject yet.
+            if inject_type == "session" || inject_type == "compact" {
+                println!("{LOADING_MESSAGE}");
+            }
+            return Ok(());
+        }
+        ServeState::NotRunning => {} // fall through to direct DB access
     }
 
     let t_db = std::time::Instant::now();

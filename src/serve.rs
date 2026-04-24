@@ -38,6 +38,7 @@ use crate::{
 struct DbReady {
     conn: Arc<Connection>,
     embedder: Arc<Mutex<Embedder>>,
+    #[allow(dead_code)]
     write_lock: WriteLock,
     #[allow(dead_code)]
     handle: db::AnyDb,
@@ -1028,6 +1029,10 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
 
     // Spawn background leader election and initialization task.
     // This task polls the lock every second until it becomes the primary.
+    //
+    // GOTCHA: Synced replicas do not support multi-process concurrency in this version.
+    // We use a continuous polling leader-election strategy to ensure exactly one process 
+    // manages the database, while allowing secondary processes to start and proxy tool calls.
     let config_for_bg = config.clone();
     let db_tx_clone = db_tx.clone();
     let idx_tx_clone = idx_tx.clone();
@@ -1247,8 +1252,9 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
     // causing spurious "no such table" errors on reads that immediately follow
     // the sync. Checkpointing merges the WAL into the main db file so the
     // post-sync snapshot is the authoritative starting state.
-    // Runs after sync (inside open_replica_with_recovery) has completed, so
-    // there is no concurrent sync to conflict with.
+    //
+    // GOTCHA: We use sync_db.checkpoint() instead of 'PRAGMA wal_checkpoint' because 
+    // Turso's .execute() fails on pragmas that return rows.
     if let db::AnyDb::Synced(ref sync_db) = handle {
         let t_cp = std::time::Instant::now();
         match sync_db.checkpoint().await {
@@ -1271,7 +1277,7 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
             RemoteMode::Replica
         );
         if is_replica {
-            mlog!("tyto: migration failed in replica mode ({e:#}), purging local replica and retrying...");
+            mlog!("tyto: CRITICAL: migration failed in replica mode ({e:#}). PURGING local replica to force clean resync...");
             drop(conn);
             db::purge_replica_files(&config.db_path())?;
             let db = Db::open(config).await?;
@@ -1301,7 +1307,11 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
             loop {
                 interval.tick().await;
                 // Periodic push/pull/checkpoint to stay in sync and keep WAL small.
-                // We use the write_lock to ensure sync doesn't overlap with local mutations.
+                //
+                // GOTCHA: We must use the write_lock to ensure sync doesn't overlap with local 
+                // mutations. Even with a single process, Limbo's sync engine can panic 
+                // (e.g., "parent should have a rightmost pointer") if remote frames are applied 
+                // while the B-Tree is being modified locally.
                 let _guard = write_lock_clone.lock().await;
                 if let Err(e) = sync_db.push().await {
                     tracing::error!(error = %e, "replica push failed");

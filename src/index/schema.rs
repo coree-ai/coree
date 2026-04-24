@@ -5,6 +5,9 @@ use std::sync::Arc;
 /// All DDL is IF NOT EXISTS so it is safe to call on every startup.
 pub async fn ensure(conn: &Arc<turso::Connection>) -> Result<()> {
     // 1. Apply PRAGMAs using the safe pragma_update() method.
+    // GOTCHA: Common SQLite pragmas like 'journal_mode' return a row containing the new value.
+    // In the Turso Rust driver, .execute() and .execute_batch() strictly expect 0 rows and 
+    // will fail with "unexpected row during execution" if rows are returned.
     conn.pragma_update("journal_mode", "WAL")
         .await
         .context("Failed to set journal_mode=WAL")?;
@@ -12,17 +15,21 @@ pub async fn ensure(conn: &Arc<turso::Connection>) -> Result<()> {
         .await
         .context("Failed to set busy_timeout")?;
 
-    // 2. Apply base schema and native FTS index.
-    // Limbo (turso) uses native USING fts instead of the C-based FTS5 module.
-    // Native FTS indexes automatically stay in sync; no triggers required.
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS index_files (
+    // 2. Apply base schema.
+    // GOTCHA: In Turso/Limbo 0.6.0-pre.22, 'IF NOT EXISTS' can be unreliable when multiple 
+    // DDL statements are run in a single execute_batch() call, sometimes failing with 
+    // "already exists" even if the table exists. We run them individually for stability.
+    //
+    // GOTCHA: Limbo's parser does not yet support 'WITHOUT ROWID' tables. SQLite's FTS5 
+    // extension uses WITHOUT ROWID for its internal shadow tables, making FTS5 databases 
+    // unreadable by Limbo. We switch to Turso's native 'USING fts' which is Limbo-compatible.
+    let ddl = [
+        ("index_files", "CREATE TABLE IF NOT EXISTS index_files (
              path        TEXT PRIMARY KEY,
              content_hash TEXT NOT NULL,
              indexed_at  TEXT NOT NULL
-         );
-
-         CREATE TABLE IF NOT EXISTS index_chunks (
+         )"),
+        ("index_chunks", "CREATE TABLE IF NOT EXISTS index_chunks (
              id             TEXT PRIMARY KEY,
              file_path      TEXT NOT NULL,
              symbol_name    TEXT NOT NULL,
@@ -38,39 +45,64 @@ pub async fn ensure(conn: &Arc<turso::Connection>) -> Result<()> {
              hotspot_score  REAL DEFAULT 0.0,
              indexed_at     TEXT NOT NULL,
              content_hash   TEXT NOT NULL
-         );
-
-         CREATE INDEX IF NOT EXISTS index_chunks_file
-             ON index_chunks (file_path);
-
-         CREATE TABLE IF NOT EXISTS index_vectors (
+         )"),
+        ("index_chunks_file_idx", "CREATE INDEX IF NOT EXISTS index_chunks_file ON index_chunks (file_path)"),
+        ("index_vectors", "CREATE TABLE IF NOT EXISTS index_vectors (
              chunk_id    TEXT NOT NULL REFERENCES index_chunks(id) ON DELETE CASCADE,
              embed_model TEXT NOT NULL,
              embedding   BLOB NOT NULL,
              PRIMARY KEY (chunk_id, embed_model)
-         );
-
-         -- Turso native FTS index
-         CREATE INDEX IF NOT EXISTS index_chunks_fts 
-             ON index_chunks USING fts(symbol_name, qualified_name, signature, doc_comment, body_preview);
-
-         CREATE TABLE IF NOT EXISTS index_commits (
+         )"),
+        ("index_chunks_fts", "CREATE INDEX IF NOT EXISTS index_chunks_fts ON index_chunks USING fts(symbol_name, qualified_name, signature, doc_comment, body_preview)"),
+        ("index_commits", "CREATE TABLE IF NOT EXISTS index_commits (
              sha       TEXT PRIMARY KEY,
              message   TEXT NOT NULL,
              author    TEXT,
              timestamp TEXT
-         );
-
-         CREATE TABLE IF NOT EXISTS index_chunk_commits (
+         )"),
+        ("index_chunk_commits", "CREATE TABLE IF NOT EXISTS index_chunk_commits (
              chunk_id   TEXT NOT NULL REFERENCES index_chunks(id) ON DELETE CASCADE,
              commit_sha TEXT NOT NULL REFERENCES index_commits(sha) ON DELETE CASCADE,
              PRIMARY KEY (chunk_id, commit_sha)
-         );
+         )"),
+        ("index_chunk_commits_idx", "CREATE INDEX IF NOT EXISTS index_chunk_commits_by_sha ON index_chunk_commits (commit_sha)"),
+    ];
 
-         CREATE INDEX IF NOT EXISTS index_chunk_commits_by_sha
-             ON index_chunk_commits (commit_sha);
-        ",
-    ).await?;
+    for (name, stmt) in ddl {
+        if let Err(e) = conn.execute(stmt, ()).await {
+            let msg = e.to_string();
+            // Limbo sometimes returns "already exists" even with IF NOT EXISTS.
+            if msg.contains("already exists") {
+                tracing::trace!(ddl = %name, "index schema item already exists");
+                continue;
+            }
+            return Err(e).context(format!("Failed to execute DDL for {}: {}", name, stmt));
+        }
+        tracing::trace!(ddl = %name, "index schema item ensured");
+    }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use turso::Builder;
+
+    #[tokio::test]
+    async fn test_schema_idempotency() -> Result<()> {
+        let db = Builder::new_local(":memory:")
+            .experimental_index_method(true)
+            .build()
+            .await?;
+        let conn = Arc::new(db.connect()?);
+
+        // First run
+        ensure(&conn).await.context("First schema run failed")?;
+
+        // Second run should succeed (idempotency check)
+        ensure(&conn).await.context("Second schema run failed (idempotency issue)")?;
+
+        Ok(())
+    }
 }

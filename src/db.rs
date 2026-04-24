@@ -87,8 +87,10 @@ async fn open_replica_with_recovery(
 ) -> Result<turso::sync::Database> {
     let build = || async {
         let mut last_err = None;
-        // Increase to 20 attempts with 250ms delay (~5 seconds total)
-        // to handle slow-exiting previous processes during restarts.
+        // GOTCHA: In Turso 0.6.0-pre.22, 'experimental_multiprocess_wal' is NOT available 
+        // for synced replicas. Only one process can have a replica open at a time.
+        // We use a high retry count (20 attempts / 5s) to handle process handovers during 
+        // quick restarts, allowing the previous process time to fully exit and release the lock.
         for i in 0..20 {
             match turso::sync::Builder::new_remote(path_str)
                 .with_remote_url(url)
@@ -111,9 +113,13 @@ async fn open_replica_with_recovery(
 
     let try_sync = |db: turso::sync::Database| async move {
         let mut last_err = None;
-        for _ in 0..5 {
+        let t_sync = std::time::Instant::now();
+        for i in 0..5 {
             match db.pull().await {
-                Ok(_) => return Ok(db),
+                Ok(_) => {
+                    tracing::debug!(elapsed_ms = t_sync.elapsed().as_millis(), attempts = i + 1, "replica pull success");
+                    return Ok(db);
+                }
                 Err(e) => {
                     last_err = Some(e);
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -130,7 +136,7 @@ async fn open_replica_with_recovery(
 
     match try_open().await {
         Ok(db) => return Ok(db),
-        Err(e) => mlog!("tyto: replica open failed ({e:#}), purging and retrying..."),
+        Err(e) => mlog!("tyto: CRITICAL: replica open failed ({e:#}). PURGING local replica files to force full resync..."),
     }
 
     purge_replica_files(path)?;
