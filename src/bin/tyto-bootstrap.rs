@@ -4,7 +4,7 @@
 // Hook mode (inject / stop / compact): print an unavailable message and exit 0
 // immediately - the MCP server instance handles the download.
 //
-// Bundled in agents/claude/bin/ and invoked by agents/claude/scripts/tyto.cmd.
+// Bundled in agents/shared/bin/ and invoked by agents/shared/scripts/tyto.cmd.
 
 use std::io::{BufRead, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
