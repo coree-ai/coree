@@ -7,6 +7,11 @@ use crate::embed;
 
 const RRF_K: f64 = 60.0;
 
+/// Escape a user query string for use in a SQLite LIKE pattern with ESCAPE '\'.
+fn like_escape(s: &str) -> String {
+    s.replace('\\', r"\\").replace('%', r"\%").replace('_', r"\_")
+}
+
 /// Type salience weights for retention scoring.
 fn type_weight(memory_type: &str) -> f64 {
     match memory_type {
@@ -152,12 +157,12 @@ pub async fn search(
     let mut kw_ranks: HashMap<String, usize> = HashMap::new();
     {
         let t = std::time::Instant::now();
-        let kw_query = format!("%{}%", query);
+        let kw_query = format!("%{}%", like_escape(query));
         let mut rows = conn
             .query(
                 "SELECT id
                  FROM memories
-                 WHERE (title LIKE ?1 OR content LIKE ?1 OR facts LIKE ?1)
+                 WHERE (title LIKE ?1 ESCAPE '\\' OR content LIKE ?1 ESCAPE '\\' OR facts LIKE ?1 ESCAPE '\\')
                    AND project_id = ?2
                    AND status = 'active'
                  LIMIT ?3",
@@ -362,13 +367,13 @@ pub async fn search_bm25(
     limit: usize,
 ) -> Result<Vec<CompactResult>> {
     let now = Utc::now();
-    let kw_query = format!("%{}%", query);
+    let kw_query = format!("%{}%", like_escape(query));
     let mut rows = conn
         .query(
             "SELECT m.id, m.type, m.title, m.created_at, m.importance,
                     m.access_count, m.last_accessed, m.source, length(m.content), m.facts, m.tags
              FROM memories m
-             WHERE (m.title LIKE ?1 OR m.content LIKE ?1 OR m.facts LIKE ?1)
+             WHERE (m.title LIKE ?1 ESCAPE '\\' OR m.content LIKE ?1 ESCAPE '\\' OR m.facts LIKE ?1 ESCAPE '\\')
                AND m.project_id = ?2
                AND m.status = 'active'
              LIMIT ?3",
@@ -494,6 +499,7 @@ pub async fn list(
     Ok(results)
 }
 
+// Kept for when Limbo gains FTS5 support; current callers use LIKE instead.
 #[allow(dead_code)]
 fn build_fts_query(query: &str) -> String {
     // FTS5 tokens may only contain alphanumerics and underscores.
