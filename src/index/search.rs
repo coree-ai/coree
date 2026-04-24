@@ -31,13 +31,42 @@ pub async fn search_code(
     query: &str,
     limit: usize,
 ) -> Result<Vec<CodeResult>> {
-    let _blob = embed::floats_to_blob(&embedding);
-    let _model = embed::model_id();
+    let blob = embed::floats_to_blob(&embedding);
+    let model = embed::model_id();
     let k = limit * 2;
 
-    // Stream A: vector search (deferred: turso doesn't have native vector ANN extension yet)
-    
-    // Stream B: Native FTS search
+    // Stream A: vector search (brute-force cosine distance over index_vectors).
+    // Same approach as memory search — turso's vector_distance_cos + vector32 work
+    // on any local DB opened with experimental_index_method(true).
+    // Gracefully degrades to FTS-only if index_vectors is empty or query fails.
+    let mut vector_ranks: HashMap<String, usize> = HashMap::new();
+    match conn.query(
+        "SELECT ic.id, vector_distance_cos(iv.embedding, vector32(?1)) as dist
+         FROM index_chunks ic
+         JOIN index_vectors iv ON iv.chunk_id = ic.id
+         WHERE iv.embed_model = ?2
+         ORDER BY dist
+         LIMIT ?3",
+        (blob, model, k as i64),
+    ).await {
+        Ok(mut rows) => {
+            let mut rank = 0usize;
+            while let Some(row) = rows.next().await? {
+                if let Ok(id) = row.get::<String>(0) {
+                    vector_ranks.insert(id, rank);
+                    rank += 1;
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "code vector search failed, falling back to FTS-only");
+        }
+    }
+
+    // Stream B: native FTS using turso's fts_match() / fts_score() functions.
+    // Syntax: WHERE fts_match(col1, col2, ..., query) — NOT the SQLite FTS5
+    // "table_name MATCH query" form which turso does not support.
+    // Results ordered by fts_score() DESC so RRF rank reflects relevance order.
     let fts_ranks: HashMap<String, usize> = {
         let fts_q = build_fts_query(query);
         if fts_q.is_empty() {
@@ -46,7 +75,8 @@ pub async fn search_code(
             let mut rows = conn.query(
                 "SELECT id
                  FROM index_chunks
-                 WHERE index_chunks_fts MATCH ?1
+                 WHERE fts_match(symbol_name, qualified_name, signature, doc_comment, body_preview, ?1)
+                 ORDER BY fts_score(symbol_name, qualified_name, signature, doc_comment, body_preview, ?1) DESC
                  LIMIT ?2",
                 (fts_q, k as i64)
             ).await?;
@@ -62,50 +92,52 @@ pub async fn search_code(
         }
     };
 
-    if fts_ranks.is_empty() {
+    // Merge candidate IDs from both streams
+    let mut all_ids: Vec<String> = vector_ranks.keys().cloned().collect();
+    for id in fts_ranks.keys() {
+        if !vector_ranks.contains_key(id) {
+            all_ids.push(id.clone());
+        }
+    }
+
+    if all_ids.is_empty() {
         return Ok(vec![]);
     }
 
-    let all_ids: Vec<String> = fts_ranks.keys().cloned().collect();
+    // Fetch metadata and compute two-stream RRF scores
+    let placeholders = all_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let sql = format!(
+        "SELECT id, symbol_name, qualified_name, symbol_kind, file_path,
+                line_start, line_end, signature, doc_comment, churn_count, hotspot_score, language
+         FROM index_chunks WHERE id IN ({placeholders})"
+    );
+    let mut rows = conn.query(&sql, turso::params_from_iter(all_ids.clone())).await?;
+    let mut scored: Vec<CodeResult> = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let id: String = row.get(0)?;
+        let rrf_v = vector_ranks.get(&id).map(|&r| 1.0 / (RRF_K + r as f64)).unwrap_or(0.0);
+        let rrf_f = fts_ranks.get(&id).map(|&r| 1.0 / (RRF_K + r as f64)).unwrap_or(0.0);
+        scored.push(CodeResult {
+            id,
+            symbol_name: row.get(1)?,
+            qualified_name: row.get(2)?,
+            symbol_kind: row.get(3)?,
+            file_path: row.get(4)?,
+            line_start: row.get(5)?,
+            line_end: row.get(6)?,
+            signature: row.get(7)?,
+            doc_comment: row.get(8)?,
+            churn_count: row.get(9).unwrap_or(0),
+            hotspot_score: row.get(10).unwrap_or(0.0),
+            language: row.get(11).unwrap_or_default(),
+            rrf_score: rrf_v + rrf_f,
+            related_commits: vec![],
+        });
+    }
 
-    // Fetch metadata in one query
-    let scored: Vec<CodeResult> = {
-        let placeholders = all_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let sql = format!(
-            "SELECT id, symbol_name, qualified_name, symbol_kind, file_path,
-                    line_start, line_end, signature, doc_comment, churn_count, hotspot_score, language
-             FROM index_chunks WHERE id IN ({placeholders})"
-        );
-        let mut rows = conn.query(&sql, turso::params_from_iter(all_ids.clone())).await?;
-        let mut results = Vec::new();
-        while let Some(row) = rows.next().await? {
-            let id: String = row.get(0)?;
-            let rrf_f = fts_ranks.get(&id).map(|&r| 1.0 / (RRF_K + r as f64)).unwrap_or(0.0);
-            results.push(CodeResult {
-                id,
-                symbol_name: row.get(1)?,
-                qualified_name: row.get(2)?,
-                symbol_kind: row.get(3)?,
-                file_path: row.get(4)?,
-                line_start: row.get(5)?,
-                line_end: row.get(6)?,
-                signature: row.get(7)?,
-                doc_comment: row.get(8)?,
-                churn_count: row.get(9).unwrap_or(0),
-                hotspot_score: row.get(10).unwrap_or(0.0),
-                language: row.get(11).unwrap_or_default(),
-                rrf_score: rrf_f,
-                related_commits: vec![],
-            });
-        }
-        results
-    };
-
-    let mut scored = scored;
     scored.sort_by(|a, b| b.rrf_score.partial_cmp(&a.rrf_score).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);
 
-    // Fetch related commits for top results
     for result in &mut scored {
         result.related_commits = fetch_related_commits_sync(conn, &result.id, 3).await?;
     }
@@ -235,11 +267,13 @@ pub fn format_result(r: &CodeResult, verbose: bool) -> String {
 }
 
 pub(crate) fn build_fts_query(query: &str) -> String {
+    // Tantivy query syntax: bare `token*` for prefix match.
+    // Operators (AND/OR/NOT) are uppercase in Tantivy, so lowercase terms are safe.
     query
         .split_whitespace()
         .filter_map(|w| {
             let clean: String = w.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
-            if clean.is_empty() { None } else { Some(format!("\"{clean}\"*")) }
+            if clean.is_empty() { None } else { Some(format!("{clean}*")) }
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -252,23 +286,19 @@ mod tests {
     #[test]
     fn fts_basic_terms() {
         let q = build_fts_query("index file");
-        assert!(q.contains("\"index\"*"));
-        assert!(q.contains("\"file\"*"));
+        assert!(q.contains("index*"));
+        assert!(q.contains("file*"));
     }
 
     #[test]
     fn fts_strips_special_chars() {
-        // Dots, dashes, and other non-alphanumeric chars stripped
         let q = build_fts_query("file.path foo-bar");
-        // "file.path" → "filepath" (dot removed)
-        assert!(q.contains("\"filepath\"*"));
-        // "foo-bar" → "foobar" (dash removed)
-        assert!(q.contains("\"foobar\"*"));
+        assert!(q.contains("filepath*"));
+        assert!(q.contains("foobar*"));
     }
 
     #[test]
     fn fts_empty_tokens_dropped() {
-        // A query of only special chars produces no terms
         let q = build_fts_query("... --- !!!");
         assert!(q.is_empty());
     }
@@ -276,14 +306,13 @@ mod tests {
     #[test]
     fn fts_single_term() {
         let q = build_fts_query("ownership");
-        assert_eq!(q, "\"ownership\"*");
+        assert_eq!(q, "ownership*");
     }
 
     #[test]
     fn fts_underscores_preserved() {
-        // Underscores are alphanumeric-adjacent and kept
         let q = build_fts_query("my_function");
-        assert!(q.contains("\"my_function\"*"));
+        assert!(q.contains("my_function*"));
     }
 
     #[test]
