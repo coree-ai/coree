@@ -19,7 +19,7 @@ const DRAIN_INTERVAL: Duration = Duration::from_millis(500);
 pub fn start(
     lock_path: PathBuf,
     project_root: PathBuf,
-    conn: Arc<Mutex<rusqlite::Connection>>,
+    conn: Arc<turso::Connection>,
     embedder: Arc<Mutex<Embedder>>,
     git_history: bool,
     extra_excludes: Vec<String>,
@@ -76,7 +76,7 @@ fn try_acquire_lock(path: &Path) -> Option<std::fs::File> {
 /// Run the two watcher loops concurrently until either exits.
 async fn run_watchers(
     project_root: &Path,
-    conn: Arc<Mutex<rusqlite::Connection>>,
+    conn: Arc<turso::Connection>,
     embedder: Arc<Mutex<Embedder>>,
     git_history: bool,
     extra_excludes: &[String],
@@ -228,7 +228,7 @@ fn is_commit_editmsg_event(event: &notify::Event) -> bool {
 /// link chunks to the new commit. No re-parse or re-embed.
 async fn handle_new_commit(
     root: &Path,
-    conn: &Arc<Mutex<rusqlite::Connection>>,
+    conn: &Arc<turso::Connection>,
     git_history: bool,
 ) -> Result<()> {
     if !git_history {
@@ -244,17 +244,10 @@ async fn handle_new_commit(
     };
 
     // Store the commit record.
-    {
-        let conn = Arc::clone(conn);
-        let commit_clone = commit.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.blocking_lock();
-            conn.execute(
-                "INSERT OR IGNORE INTO index_commits (sha, message) VALUES (?1, ?2)",
-                [commit_clone.sha, commit_clone.message],
-            )
-        }).await??;
-    }
+    conn.execute(
+        "INSERT OR IGNORE INTO index_commits (sha, message) VALUES (?1, ?2)",
+        (commit.sha.clone(), commit.message.clone()),
+    ).await?;
 
     // Find which files were changed in this commit.
     let changed_files = tokio::task::spawn_blocking({
@@ -274,37 +267,20 @@ async fn handle_new_commit(
             }
         }).await?;
 
-        {
-            let conn = Arc::clone(conn);
-            let rel_path_clone = rel_path.clone();
-            tokio::task::spawn_blocking(move || {
-                let conn = conn.blocking_lock();
-                conn.execute(
-                    "UPDATE index_chunks SET churn_count = ?1, hotspot_score = ?2 WHERE file_path = ?3",
-                    rusqlite::params![new_count, new_hotspot, rel_path_clone],
-                )
-            }).await??;
-        }
+        conn.execute(
+            "UPDATE index_chunks SET churn_count = ?1, hotspot_score = ?2 WHERE file_path = ?3",
+            (new_count, new_hotspot, rel_path.clone()),
+        ).await?;
 
         // Link all chunks in this file to the new commit.
-        {
-            let conn = Arc::clone(conn);
-            let rel_path_clone = rel_path.clone();
-            let commit_sha = commit.sha.clone();
-            tokio::task::spawn_blocking(move || {
-                let conn = conn.blocking_lock();
-                let mut stmt = conn.prepare("SELECT id FROM index_chunks WHERE file_path = ?1")?;
-                let rows = stmt.query_map([rel_path_clone], |row| row.get::<_, String>(0))?;
-                for row in rows {
-                    if let Ok(chunk_id) = row {
-                        let _ = conn.execute(
-                            "INSERT OR IGNORE INTO index_chunk_commits (chunk_id, commit_sha) VALUES (?1, ?2)",
-                            [chunk_id, commit_sha.clone()],
-                        );
-                    }
-                }
-                Ok::<(), anyhow::Error>(())
-            }).await??;
+        let mut rows = conn.query("SELECT id FROM index_chunks WHERE file_path = ?1", (rel_path.clone(),)).await?;
+        while let Some(row) = rows.next().await? {
+            if let Ok(chunk_id) = row.get::<String>(0) {
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO index_chunk_commits (chunk_id, commit_sha) VALUES (?1, ?2)",
+                    (chunk_id, commit.sha.clone()),
+                ).await;
+            }
         }
     }
 

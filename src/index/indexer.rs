@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
-use rusqlite::OptionalExtension;
 
 use crate::embed::{self, Embedder};
 use super::git;
@@ -47,7 +46,7 @@ pub struct IndexResult {
 /// Runs in a Tokio blocking task per file to avoid starving the async runtime.
 pub async fn run(
     project_root: PathBuf,
-    conn: Arc<Mutex<rusqlite::Connection>>,
+    conn: Arc<turso::Connection>,
     embedder: Arc<Mutex<Embedder>>,
     git_history: bool,
     extra_excludes: Vec<String>,
@@ -58,7 +57,8 @@ pub async fn run(
     crate::mlog!("index: scanning {}", project_root.display());
     let files: Vec<(PathBuf, Lang)> = {
         let root = project_root.clone();
-        tokio::task::spawn_blocking(move || collect_files(&root, &extra_excludes)).await??
+        let excludes = extra_excludes.clone();
+        tokio::task::spawn_blocking(move || collect_files(&root, &excludes)).await??
     };
 
     result.files_scanned = files.len();
@@ -148,18 +148,14 @@ fn collect_files(root: &Path, extra_excludes: &[String]) -> Result<Vec<(PathBuf,
 }
 
 /// Remove all index data for a deleted file.
-pub(crate) async fn remove_file(conn: &Arc<Mutex<rusqlite::Connection>>, project_root: &Path, file_path: &Path) -> Result<()> {
+pub(crate) async fn remove_file(conn: &Arc<turso::Connection>, project_root: &Path, file_path: &Path) -> Result<()> {
     let rel_path = file_path.strip_prefix(project_root)
         .unwrap_or(file_path)
         .to_string_lossy()
         .to_string();
-    let conn = Arc::clone(conn);
-    tokio::task::spawn_blocking(move || {
-        let conn = conn.blocking_lock();
-        conn.execute("DELETE FROM index_chunks WHERE file_path = ?1", [rel_path.clone()])?;
-        conn.execute("DELETE FROM index_files WHERE path = ?1", [rel_path])?;
-        Ok::<(), anyhow::Error>(())
-    }).await??;
+    
+    conn.execute("DELETE FROM index_chunks WHERE file_path = ?1", (rel_path.clone(),)).await?;
+    conn.execute("DELETE FROM index_files WHERE path = ?1", (rel_path,)).await?;
     Ok(())
 }
 
@@ -168,7 +164,7 @@ pub(crate) async fn index_file(
     project_root: &Path,
     file_path: &Path,
     lang: &Lang,
-    conn: &Arc<Mutex<rusqlite::Connection>>,
+    conn: &Arc<turso::Connection>,
     embedder: &Arc<Mutex<Embedder>>,
     git_history: bool,
 ) -> Result<usize> {
@@ -182,32 +178,18 @@ pub(crate) async fn index_file(
         .to_string();
 
     // Check if file hash has changed
-    let stored_hash: Option<String> = {
-        let conn = Arc::clone(conn);
-        let rel_path_clone = rel_path.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.blocking_lock();
-            conn.query_row(
-                "SELECT content_hash FROM index_files WHERE path = ?1",
-                [rel_path_clone],
-                |row| row.get(0),
-            ).optional()
-        }).await??
-    };
+    let mut rows = conn.query(
+        "SELECT content_hash FROM index_files WHERE path = ?1",
+        (rel_path.clone(),),
+    ).await?;
+    let stored_hash: Option<String> = rows.next().await?.map(|r| r.get(0)).transpose()?;
 
     if stored_hash.as_deref() == Some(&content_hash) {
         return Ok(0); // unchanged
     }
 
     // Delete old chunks for this file (CASCADE removes vectors and FTS entries)
-    {
-        let conn = Arc::clone(conn);
-        let rel_path_clone = rel_path.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.blocking_lock();
-            conn.execute("DELETE FROM index_chunks WHERE file_path = ?1", [rel_path_clone])
-        }).await??;
-    }
+    conn.execute("DELETE FROM index_chunks WHERE file_path = ?1", (rel_path.clone(),)).await?;
 
     // Parse in blocking thread (tree-sitter is synchronous, CPU-bound)
     let source_clone = source.clone();
@@ -237,19 +219,11 @@ pub(crate) async fn index_file(
     let churn_count = commits.len() as i64;
 
     // Store commit records for history search
-    {
-        let conn = Arc::clone(conn);
-        let commits_clone = commits.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.blocking_lock();
-            for commit in commits_clone {
-                let _ = conn.execute(
-                    "INSERT OR IGNORE INTO index_commits (sha, message) VALUES (?1, ?2)",
-                    [commit.sha, commit.message],
-                );
-            }
-            Ok::<(), anyhow::Error>(())
-        }).await??;
+    for commit in &commits {
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO index_commits (sha, message) VALUES (?1, ?2)",
+            (commit.sha.clone(), commit.message.clone()),
+        ).await;
     }
 
     let now = Utc::now().to_rfc3339();
@@ -268,54 +242,34 @@ pub(crate) async fn index_file(
         let blob = embed::floats_to_blob(&embedding);
 
         let chunk_id = Uuid::new_v4().to_string();
-        {
-            let conn = Arc::clone(conn);
-            let chunk_id_clone = chunk_id.clone();
-            let rel_path_clone = rel_path.clone();
-            let symbol_name = chunk.symbol_name.clone();
-            let qualified_name = chunk.qualified_name.clone();
-            let symbol_kind = chunk.symbol_kind.clone();
-            let signature = chunk.signature.clone();
-            let doc_comment = chunk.doc_comment.clone();
-            let body_preview = chunk.body_preview.clone();
-            let line_start = chunk.line_start as i64;
-            let line_end = chunk.line_end as i64;
-            let lang_name_clone = lang_name.clone();
-            let now_clone = now.clone();
-            let model_id_clone = model_id.clone();
-            let commits_clone = commits.clone();
-            let chunk_hash_clone = chunk_hash.clone();
-            
-            tokio::task::spawn_blocking(move || {
-                let conn = conn.blocking_lock();
-                conn.execute(
-                    "INSERT INTO index_chunks \
-                     (id, file_path, symbol_name, qualified_name, symbol_kind, signature, \
-                      doc_comment, body_preview, line_start, line_end, language, \
-                      churn_count, hotspot_score, indexed_at, content_hash) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
-                    rusqlite::params![
-                        chunk_id_clone, rel_path_clone, symbol_name, qualified_name, symbol_kind,
-                        signature, doc_comment, body_preview, line_start, line_end,
-                        lang_name_clone, churn_count, hotspot_score, now_clone, chunk_hash_clone
-                    ],
-                )?;
+        conn.execute(
+            "INSERT INTO index_chunks \
+             (id, file_path, symbol_name, qualified_name, symbol_kind, signature, \
+              doc_comment, body_preview, line_start, line_end, language, \
+              churn_count, hotspot_score, indexed_at, content_hash) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+            (
+                chunk_id.clone(), rel_path.clone(), chunk.symbol_name.clone(),
+                chunk.qualified_name.clone(), chunk.symbol_kind.clone(),
+                chunk.signature.clone(), chunk.doc_comment.clone(),
+                chunk.body_preview.clone(), chunk.line_start as i64,
+                chunk.line_end as i64, lang_name.clone(), churn_count,
+                hotspot_score, now.clone(), chunk_hash.clone()
+            ),
+        ).await?;
 
-                conn.execute(
-                    "INSERT OR REPLACE INTO index_vectors (chunk_id, embed_model, embedding) \
-                     VALUES (?1, ?2, ?3)",
-                    rusqlite::params![chunk_id_clone, model_id_clone, blob],
-                )?;
+        conn.execute(
+            "INSERT OR REPLACE INTO index_vectors (chunk_id, embed_model, embedding) \
+             VALUES (?1, ?2, ?3)",
+            (chunk_id.clone(), model_id.clone(), blob),
+        ).await?;
 
-                for commit in commits_clone {
-                    let _ = conn.execute(
-                        "INSERT OR IGNORE INTO index_chunk_commits (chunk_id, commit_sha) \
-                         VALUES (?1, ?2)",
-                        [chunk_id_clone.clone(), commit.sha],
-                    );
-                }
-                Ok::<(), anyhow::Error>(())
-            }).await??;
+        for commit in &commits {
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO index_chunk_commits (chunk_id, commit_sha) \
+                 VALUES (?1, ?2)",
+                (chunk_id.clone(), commit.sha.clone()),
+            ).await;
         }
 
         stored += 1;
@@ -326,19 +280,13 @@ pub(crate) async fn index_file(
     Ok(stored)
 }
 
-async fn upsert_file_hash(conn: &Arc<Mutex<rusqlite::Connection>>, path: &str, hash: &str) -> Result<()> {
+async fn upsert_file_hash(conn: &Arc<turso::Connection>, path: &str, hash: &str) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    let conn = Arc::clone(conn);
-    let path_clone = path.to_string();
-    let hash_clone = hash.to_string();
-    tokio::task::spawn_blocking(move || {
-        let conn = conn.blocking_lock();
-        conn.execute(
-            "INSERT OR REPLACE INTO index_files (path, content_hash, indexed_at) \
-             VALUES (?1, ?2, ?3)",
-            [path_clone, hash_clone, now],
-        )
-    }).await??;
+    conn.execute(
+        "INSERT OR REPLACE INTO index_files (path, content_hash, indexed_at) \
+         VALUES (?1, ?2, ?3)",
+        (path.to_string(), hash.to_string(), now),
+    ).await?;
     Ok(())
 }
 
