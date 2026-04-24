@@ -190,6 +190,29 @@ We implemented a two-tier fix:
 
 ---
 
+## Phase 8: B-Tree Structural Panics and Race Conditions
+
+### The Crash
+While running concurrent memory operations and background syncs, we observed a catastrophic failure in the Turso (Limbo) engine:
+`PANIC: parent should have a rightmost pointer` in `turso_core/storage/btree.rs`.
+
+### The Investigation
+We identified that the crash was caused by a **race condition** between the manual background sync loop (performing `.pull()` and `.push()`) and the tool handlers (performing local writes via `.execute()`). Even with a single `tyto serve` process, the sync engine's background activity is essentially a concurrent mutation source.
+
+### The Fix: Coordinated Sync
+We refactored `src/serve.rs` to pass the application-level `WriteLock` into the background sync task. The sync loop now acquires this lock before performing any `push`, `pull`, or `checkpoint` operations. This ensures that remote changes are only applied when the local database is not in the middle of a transaction, maintaining B-Tree structural integrity.
+
+```rust
+// Coordinated background sync
+let _guard = write_lock.lock().await;
+sync_db.pull().await?;
+sync_db.checkpoint().await?;
+```
+
+---
+
+## Appendix: Minimal Isolated Reproduction
+
 To facilitate debugging and potentially report these issues to the Turso maintainers, we created a minimal reproduction script.
 
 ### Key Findings
