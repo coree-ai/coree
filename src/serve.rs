@@ -468,17 +468,20 @@ impl TytoServer {
                 }
             }
 
-            mem_similar.truncate(5);
-            code_similar.truncate(5);
+            let mut similar: Vec<(f64, String)> = Vec::new();
+            for m in &mem_similar {
+                similar.push((m.score, format!("  [memory] {:.3}  {}  {}  ~{}c\n", m.score, m.id, m.title, m.content_len)));
+            }
+            for c in &code_similar {
+                similar.push((c.rrf_score, format!("  [symbol] {:.3}  {}  {}:{}-{}\n", c.rrf_score, c.qualified_name, c.file_path, c.line_start, c.line_end)));
+            }
+            similar.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            similar.truncate(8);
 
-            if !mem_similar.is_empty() || !code_similar.is_empty() {
+            if !similar.is_empty() {
                 out.push_str("\n---\nsimilar:\n");
-                for m in &mem_similar {
-                    out.push_str(&format!("  [memory] {}  {}  ~{}c\n", m.id, m.title, m.content_len));
-                }
-                for c in &code_similar {
-                    out.push_str(&format!("  [symbol] {}  {}:{}-{}\n",
-                        c.qualified_name, c.file_path, c.line_start, c.line_end));
+                for (_, line) in &similar {
+                    out.push_str(line);
                 }
             }
         }
@@ -708,19 +711,20 @@ impl TytoServer {
                     .take(5)
                     .collect();
 
-                if !mem_similar.is_empty() || !code_similar.is_empty() {
+                let mut similar: Vec<(f64, String)> = Vec::new();
+                for m in &mem_similar {
+                    similar.push((m.score, format!("  [memory] {:.3}  {}  {}  ~{}c\n", m.score, m.id, m.title, m.content_len)));
+                }
+                for c in &code_similar {
+                    similar.push((c.rrf_score, format!("  [symbol] {:.3}  {}  {}:{}-{}\n", c.rrf_score, c.qualified_name, c.file_path, c.line_start, c.line_end)));
+                }
+                similar.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                similar.truncate(8);
+
+                if !similar.is_empty() {
                     out.push_str("similar:\n");
-                    for m in &mem_similar {
-                        out.push_str(&format!(
-                            "  [memory] {}  {}  ~{}c\n",
-                            m.id, m.title, m.content_len
-                        ));
-                    }
-                    for c in &code_similar {
-                        out.push_str(&format!(
-                            "  [symbol] {}  {}:{}-{}\n",
-                            c.qualified_name, c.file_path, c.line_start, c.line_end
-                        ));
+                    for (_, line) in &similar {
+                        out.push_str(line);
                     }
                 }
             }
