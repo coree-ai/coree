@@ -1,15 +1,24 @@
 name: E2E
 
-# Verifies the full install chain on every target platform:
+# Verifies the full binary on every target platform:
 #   1. Build release binary
-#   2. Run coree.cmd with COREE_BINARY_OVERRIDE -> verifies coree.cmd -> coree-bootstrap -> coree chain
-#   3. `coree --version` and `coree status` smoke tests
-#   4. Inject state and MCP store + search E2E
+#   2. `coree --version` and `coree status` smoke tests
+#   3. Inject state and MCP store + search E2E
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'agents/**'
+      - 'npm/**'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'agents/**'
+      - 'npm/**'
 
 env:
   CARGO_TERM_COLOR: always
@@ -57,13 +66,6 @@ jobs:
         shell: bash
         run: |
           echo "COREE_BIN=$GITHUB_WORKSPACE/target/${{ matrix.target }}/release/${{ matrix.binary }}" >> "$GITHUB_ENV"
-
-      # Verify the full chain: coree.cmd -> committed coree-bootstrap -> COREE_BINARY_OVERRIDE -> coree
-      - name: Bootstrap chain - coree.cmd routes to coree via override
-        shell: bash
-        env:
-          COREE_BINARY_OVERRIDE: ${{ env.COREE_BIN }}
-        run: agents/shared/scripts/coree.cmd --version
 
       - name: Binary - version
         shell: bash

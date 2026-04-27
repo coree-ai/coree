@@ -37,14 +37,6 @@ uuid = { version = "1.23.1", features = ["v4"] }
 # Content hash dedup
 sha2 = "0.11.0"
 
-# Stub binary: sync HTTP download for first-install bootstrap
-ureq = { version = "3.3.0", features = ["rustls"], default-features = false }
-
-# Stub binary: archive extraction for first-install download
-flate2 = "1.1.9"
-tar = "0.4.45"
-zip = "8.5.1"
-
 # JSON schema generation for MCP tool definitions
 schemars = "1.2.1"
 
