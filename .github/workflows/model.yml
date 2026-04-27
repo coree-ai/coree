@@ -38,8 +38,8 @@ jobs:
           pip install huggingface_hub --quiet
           python3 scripts/fetch-model.py dist/model
 
-      - name: Generate model package
-        run: node scripts/generate-npm-packages.mjs --with-model
+      - name: Bundle model
+        run: node scripts/bundle-model.mjs
 
       - name: Pack model package
         run: npm pack npm/@coree-ai/coree-model-bge-small-en-v1.5 --pack-destination dist/

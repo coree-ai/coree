@@ -34,18 +34,3 @@ for (const key of Object.keys(mainManifest.optionalDependencies)) {
   mainManifest.optionalDependencies[key] = version;
 }
 fs.writeFileSync(path.join(MAIN_PKG, 'package.json'), JSON.stringify(mainManifest, null, 2) + '\n');
-
-// Copy model into the model package when --with-model is passed.
-// Pass this flag only when the model version is new and fetch-model.py has run.
-// Omitting it skips the copy (model version already published); passing it and
-// having dist/model absent is a hard error so real fetch failures are not hidden.
-const MODEL_PKG = path.join(NPM_ROOT, 'coree-model-bge-small-en-v1.5');
-if (process.argv.includes('--with-model')) {
-  const modelSrc = path.join(REPO_ROOT, 'dist', 'model');
-  const modelDst = path.join(MODEL_PKG, 'model');
-  if (!fs.existsSync(modelSrc)) { console.error(`Missing model: ${modelSrc}`); process.exit(1); }
-  fs.cpSync(modelSrc, modelDst, { recursive: true });
-  console.log('Bundled model into model package.');
-} else {
-  console.log('Skipping model (--with-model not passed, version already published).');
-}

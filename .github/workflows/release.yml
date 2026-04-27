@@ -113,7 +113,11 @@ jobs:
           python3 scripts/fetch-model.py dist/model
 
       - name: Generate npm packages
-        run: node scripts/generate-npm-packages.mjs ${{ steps.model-check.outputs.new == 'true' && '--with-model' || '' }}
+        run: node scripts/generate-npm-packages.mjs
+
+      - name: Bundle model
+        if: steps.model-check.outputs.new == 'true'
+        run: node scripts/bundle-model.mjs
 
       - name: Publish model package
         if: steps.model-check.outputs.new == 'true'
