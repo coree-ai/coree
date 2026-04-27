@@ -7,7 +7,7 @@ use crate::{
 };
 
 pub async fn run(config: &Config) -> Result<()> {
-    let pid = project_id::resolve(&config.project_root, config.project_id.as_deref());
+    let pid = project_id::resolve(config.project_root(), config.project_id.as_deref());
 
     let db = Db::open(config).await?;
     let conn = db.conn;

@@ -3,6 +3,7 @@
 {
   dotenv.enable = true;
 
+  languages.javascript.enable = true;
   languages.rust.enable = true;
 
   env.COREE_BINARY_OVERRIDE = "${config.devenv.root}/target/release/coree";

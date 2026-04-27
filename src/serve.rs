@@ -1105,10 +1105,10 @@ pub async fn run(config: Config) -> Result<()> {
     if let Ok(cwd) = std::env::current_dir() {
         mlog!("cwd: {}", cwd.display());
     }
-    mlog!("project root: {}", config.project_root.display());
+    mlog!("project root: {}", config.project_root().display());
     mlog!("memory: {:?}", config.memory.storage);
 
-    let pid = project_id::resolve(&config.project_root, config.project_id.as_deref());
+    let pid = project_id::resolve(config.project_root(), config.project_id.as_deref());
 
     // Set up crash log and panic hook before any fallible work.
     // crash.log is read by `coree inject` on next session start and surfaced to the AI.
@@ -1152,7 +1152,7 @@ pub async fn run(config: Config) -> Result<()> {
 /// is found. The server is fully reachable so the AI can call tools, but every
 /// tool call returns a "no config" message with setup instructions.
 async fn serve_no_config(config: Config) -> Result<()> {
-    let suggested = project_id::infer(&config.project_root);
+    let suggested = project_id::infer(config.project_root());
     let no_config_msg = format!(
         "coree has loaded, but there is no `.coree.toml` configuration file for this \
          project, so memories will not be stored or retrieved this session.\n\
@@ -1269,7 +1269,7 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
                     !matches!(config_for_bg.index.storage.mode, StorageMode::Disabled);
                 if index_enabled {
                     let db_path = config_for_bg.index_db_path();
-                    let project_root = config_for_bg.project_root.clone();
+                    let project_root = config_for_bg.project_root().to_path_buf();
                     let git_history = config_for_bg.index.git_history;
                     let extra_excludes = config_for_bg.index.exclude.clone();
                     tokio::spawn(async move {

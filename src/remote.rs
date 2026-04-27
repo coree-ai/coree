@@ -328,7 +328,7 @@ fn update_config(config: &Config, remote_url: &str) -> Result<()> {
     let config_path = config
         .source_path
         .clone()
-        .unwrap_or_else(|| config.project_root.join(".coree.toml"));
+        .unwrap_or_else(|| config.project_root().join(".coree.toml"));
 
     let existing = if config_path.exists() {
         std::fs::read_to_string(&config_path)

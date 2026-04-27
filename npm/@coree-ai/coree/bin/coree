@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+'use strict';
+
+const path = require('path');
+const { spawnSync } = require('child_process');
+const { platform, arch, env } = process;
+
+const PLATFORMS = {
+  'linux-x64':    '@coree-ai/coree-linux-x64/coree',
+  'linux-arm64':  '@coree-ai/coree-linux-arm64/coree',
+  'darwin-arm64': '@coree-ai/coree-darwin-arm64/coree',
+  'win32-x64':    '@coree-ai/coree-win32-x64/coree.exe',
+};
+
+function selectBin() {
+  if (env.COREE_BINARY_OVERRIDE) return env.COREE_BINARY_OVERRIDE;
+  const key = `${platform}-${arch}`;
+  const pkg = PLATFORMS[key];
+  if (!pkg) {
+    process.stderr.write(`coree: unsupported platform: ${platform} ${arch}\n`);
+    process.exit(1);
+  }
+  try {
+    return require.resolve(pkg);
+  } catch {
+    process.stderr.write(`coree: platform binary not installed: ${pkg}\n`);
+    process.stderr.write('Try reinstalling @coree-ai/coree.\n');
+    process.exit(1);
+  }
+}
+
+const bin = selectBin();
+
+// Point the binary at the bundled model so fastembed skips the download.
+const modelDir = path.join(__dirname, '..', 'model');
+const childEnv = { ...env, COREE_MODEL_DIR: modelDir };
+
+// Codex: preserve project root from PWD (Node.js does not reset PWD like shells do).
+if (!childEnv.COREE__PROJECT_ROOT && childEnv.PWD && childEnv.PWD !== process.cwd()) {
+  childEnv.COREE__PROJECT_ROOT = childEnv.PWD;
+}
+
+const result = spawnSync(bin, process.argv.slice(2), {
+  stdio: 'inherit',
+  shell: false,
+  env: childEnv,
+});
+
+if (result.error) throw result.error;
+process.exitCode = result.status ?? 1;

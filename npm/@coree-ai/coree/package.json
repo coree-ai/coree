@@ -1,0 +1,37 @@
+{
+  "name": "@coree-ai/coree",
+  "version": "0.0.0",
+  "description": "Persistent memory and code intelligence for AI agents",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coree-ai/coree.git",
+    "directory": "npm/@coree-ai/coree"
+  },
+  "bin": {
+    "coree": "bin/coree"
+  },
+  "files": [
+    "bin/coree",
+    ".claude-plugin/plugin.json",
+    ".mcp.json",
+    "hooks/hooks.json",
+    "model/",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@coree-ai/coree-linux-x64": "0.0.0",
+    "@coree-ai/coree-linux-arm64": "0.0.0",
+    "@coree-ai/coree-darwin-arm64": "0.0.0",
+    "@coree-ai/coree-win32-x64": "0.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

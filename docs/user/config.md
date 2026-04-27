@@ -18,6 +18,7 @@ Any config field can be overridden via environment variable using `COREE__<SECTI
 
 ```
 COREE__PROJECT_ID                -> project_id
+COREE__PROJECT_ROOT              -> project_root
 COREE__MEMORY__MODE              -> memory.mode
 COREE__MEMORY__REMOTE_URL        -> memory.remote_url
 COREE__MEMORY__REMOTE_AUTH_TOKEN -> memory.remote_auth_token
@@ -34,6 +35,16 @@ project_id = "my-project"
 ```
 
 Scopes all memories to this identifier. Defaults to a hash of the project root path. Set this explicitly if you want memories to be portable across machines or directory locations.
+
+---
+
+### `project_root`
+
+```toml
+project_root = "/absolute/path/to/project"
+```
+
+Overrides the directory used for `.coree.toml` discovery and for resolving managed and local storage paths. This is mainly useful for agent integrations that must launch coree from a plugin directory instead of the active project directory.
 
 ---
 

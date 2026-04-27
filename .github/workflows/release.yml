@@ -56,3 +56,57 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.artifact }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  publish-npm:
+    name: Publish npm packages
+    runs-on: ubuntu-latest
+    needs: [release]
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Extract artifacts
+        run: |
+          cd dist
+          for f in *.tar.gz; do tar xzf "$f"; done
+          for f in *.zip; do unzip -o "$f"; done
+
+      - name: Fetch embedding model
+        run: |
+          mkdir -p dist/model
+          # TODO: determine exact files fastembed writes to ~/.cache/coree/models/
+          # and fetch them from HuggingFace here
+
+      - name: Generate npm packages
+        run: node scripts/generate-npm-packages.mjs
+
+      - name: Publish platform packages
+        run: |
+          for pkg in npm/@coree-ai/coree-*; do
+            npm publish "$pkg" --access public
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish main package
+        run: npm publish npm/@coree-ai/coree --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

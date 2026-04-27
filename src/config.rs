@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
@@ -90,6 +90,11 @@ impl Default for IndexConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+struct ProjectRootConfig {
+    project_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
     /// Project identifier. Affects both memory query scoping and managed path keying.
     pub project_id: Option<String>,
@@ -102,12 +107,20 @@ pub struct Config {
     #[serde(skip)]
     pub source_path: Option<PathBuf>,
     /// Root directory of the project. All paths are derived from this.
-    /// Determined at load time: `.coree.toml` parent -> nearest `.git/` ancestor -> CWD.
-    #[serde(skip)]
-    pub project_root: PathBuf,
+    /// Set by `Config::load()`: explicit `COREE__PROJECT_ROOT` env var or `project_root` in config,
+    /// otherwise `.coree.toml` parent -> nearest `.git/` ancestor -> CWD.
+    #[serde(default)]
+    project_root: Option<PathBuf>,
 }
 
 impl Config {
+    /// Returns the project root. Always `Some` after `Config::load()`.
+    pub fn project_root(&self) -> &Path {
+        self.project_root
+            .as_deref()
+            .expect("project_root not initialized; use Config::load()")
+    }
+
     /// Load config with layered precedence: defaults < file < env vars.
     ///
     /// File resolution: walk up from `start_dir` looking for `.coree.toml`,
@@ -115,18 +128,28 @@ impl Config {
     ///
     /// Env var mapping: `COREE__<SECTION>__<FIELD>` overrides `section.field`.
     /// Double underscore separates nesting levels; single underscore is part of the name.
+    ///   COREE__PROJECT_ROOT              -> project_root (overrides config file discovery start dir)
     ///   COREE__MEMORY__MODE              -> memory.mode        (managed|local|remote|disabled)
     ///   COREE__MEMORY__REMOTE_MODE       -> memory.remote_mode (direct|replica)
     ///   COREE__MEMORY__REMOTE_URL        -> memory.remote_url
     ///   COREE__MEMORY__REMOTE_AUTH_TOKEN -> memory.remote_auth_token
     ///   COREE__PROJECT_ID                -> project_id
     pub fn load(start_dir: &Path) -> Result<Self> {
-        let project_config = find_project_config(start_dir);
         let global_config = global_config_path().filter(|p| p.exists());
 
-        // Layer: global < project < env vars.
-        // Both files are merged so a global Turso backend can be set once and
-        // individual projects only need to override project_id.
+        // First pass: extract project_root from global config + env vars so it can be
+        // used as the start directory for .coree.toml discovery.
+        let bootstrap_root = configured_project_root({
+            let mut fig = Figment::new();
+            if let Some(ref path) = global_config {
+                fig = fig.merge(Toml::file(path));
+            }
+            fig.merge(Env::prefixed("COREE__").split("__"))
+        })?;
+        let effective_start = bootstrap_root.as_deref().unwrap_or(start_dir);
+        let project_config = find_project_config(effective_start);
+
+        // Second pass: full config load with the discovered project config file.
         let mut fig = Figment::new();
         if let Some(ref path) = global_config {
             fig = fig.merge(Toml::file(path));
@@ -134,14 +157,15 @@ impl Config {
         if let Some(ref path) = project_config {
             fig = fig.merge(Toml::file(path));
         }
-        // Double underscore is the figment-idiomatic level separator.
-        // COREE__MEMORY__REMOTE_AUTH_TOKEN -> memory.remote_auth_token
-        // COREE__PROJECT_ID               -> project_id
         fig = fig.merge(Env::prefixed("COREE__").split("__"));
 
         let mut cfg: Config = fig.extract().context("Failed to load configuration")?;
         cfg.source_path = project_config;
-        cfg.project_root = find_project_root(start_dir, cfg.source_path.as_deref());
+        if cfg.project_root.is_none() {
+            cfg.project_root = Some(find_project_root(effective_start, cfg.source_path.as_deref()));
+        } else {
+            validate_project_root(cfg.project_root.as_deref().unwrap())?;
+        }
         Ok(cfg)
     }
 
@@ -156,7 +180,7 @@ impl Config {
         match s.mode {
             StorageMode::Managed | StorageMode::Disabled => self
                 .managed_base(s)
-                .join(encode_project_path(&self.project_root))
+                .join(encode_project_path(self.project_root()))
                 .join("memory.db"),
             StorageMode::Local => self.resolve_local_path(s, ".coree/memory.db"),
             StorageMode::Remote => match s.remote_mode {
@@ -165,14 +189,14 @@ impl Config {
                         self.resolve_local_path(s, ".coree/memory.replica.db")
                     } else {
                         self.managed_base(s)
-                            .join(encode_project_path(&self.project_root))
+                            .join(encode_project_path(self.project_root()))
                             .join("memory.replica.db")
                     }
                 }
                 RemoteMode::Direct => {
                     // No real local DB; parent dir used for serve.lock/ready/crash.log.
                     self.managed_base(s)
-                        .join(encode_project_path(&self.project_root))
+                        .join(encode_project_path(self.project_root()))
                         .join("memory.remote.db")
                 }
             },
@@ -229,7 +253,7 @@ impl Config {
             StorageMode::Local => self.resolve_local_path(s, ".coree/memory.db"),
             _ => self
                 .managed_base(s)
-                .join(encode_project_path(&self.project_root))
+                .join(encode_project_path(self.project_root()))
                 .join("memory.db"),
         }
     }
@@ -243,7 +267,7 @@ impl Config {
         match s.mode {
             StorageMode::Managed | StorageMode::Disabled | StorageMode::Remote => self
                 .managed_base(s)
-                .join(encode_project_path(&self.project_root))
+                .join(encode_project_path(self.project_root()))
                 .join("index.db"),
             StorageMode::Local => self.resolve_local_path(s, ".coree/index.db"),
         }
@@ -268,7 +292,7 @@ impl Config {
         if p.is_absolute() {
             p.to_path_buf()
         } else {
-            self.project_root.join(p)
+            self.project_root().join(p)
         }
     }
 }
@@ -319,6 +343,31 @@ fn global_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("coree").join("config.toml"))
 }
 
+fn configured_project_root(fig: Figment) -> Result<Option<PathBuf>> {
+    let Some(path) = fig
+        .extract::<ProjectRootConfig>()
+        .context("Failed to load project_root configuration")?
+        .project_root
+    else {
+        return Ok(None);
+    };
+    validate_project_root(&path)?;
+    Ok(Some(path))
+}
+
+fn validate_project_root(path: &Path) -> Result<()> {
+    if !path.is_absolute() {
+        bail!("project_root must be an absolute path: {}", path.display());
+    }
+    if !path.is_dir() {
+        bail!(
+            "project_root must point to an existing directory: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,7 +375,7 @@ mod tests {
     #[test]
     fn db_path_managed_mode() {
         let cfg = Config {
-            project_root: PathBuf::from("/some/project"),
+            project_root: Some(PathBuf::from("/some/project")),
             ..Default::default()
         };
         let path = cfg.db_path();
@@ -338,7 +387,7 @@ mod tests {
     #[test]
     fn db_path_local_mode() {
         let cfg = Config {
-            project_root: PathBuf::from("/some/project"),
+            project_root: Some(PathBuf::from("/some/project")),
             memory: MemoryConfig {
                 storage: StorageConfig {
                     mode: StorageMode::Local,
@@ -356,7 +405,7 @@ mod tests {
     #[test]
     fn db_path_local_mode_explicit_path() {
         let cfg = Config {
-            project_root: PathBuf::from("/some/project"),
+            project_root: Some(PathBuf::from("/some/project")),
             memory: MemoryConfig {
                 storage: StorageConfig {
                     mode: StorageMode::Local,
@@ -375,7 +424,7 @@ mod tests {
     #[test]
     fn local_db_path_managed_returns_managed_path() {
         let cfg = Config {
-            project_root: PathBuf::from("/some/project"),
+            project_root: Some(PathBuf::from("/some/project")),
             ..Default::default()
         };
         let path = cfg.local_db_path();
@@ -396,6 +445,25 @@ mod tests {
     fn find_project_root_falls_back_to_start_dir() {
         let root = find_project_root(Path::new("/tmp/norepo"), None);
         assert_eq!(root, PathBuf::from("/tmp/norepo"));
+    }
+
+    #[test]
+    fn project_root_can_be_configured_from_project_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let actual_root = temp.path().join("actual");
+        let configured_root = temp.path().join("configured");
+        std::fs::create_dir_all(&actual_root).unwrap();
+        std::fs::create_dir_all(&configured_root).unwrap();
+        std::fs::write(
+            actual_root.join(".coree.toml"),
+            format!("project_root = \"{}\"\n", configured_root.display()),
+        )
+        .unwrap();
+
+        let cfg = Config::load(&actual_root).unwrap();
+
+        assert_eq!(cfg.project_root(), configured_root.as_path());
+        assert_eq!(cfg.source_path, Some(actual_root.join(".coree.toml")));
     }
 
     #[test]

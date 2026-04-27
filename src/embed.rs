@@ -19,16 +19,20 @@ pub struct Embedder {
 
 impl Embedder {
     pub fn load() -> Result<Self> {
-        let cache_dir = dirs::cache_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from(".cache"))
-            .join("coree")
-            .join("models");
-
-        if !cache_dir.exists() {
-            eprintln!(
-                "[coree] Downloading embedding model (~22MB) on first run. This may take a minute..."
-            );
-        }
+        let cache_dir = if let Ok(dir) = std::env::var("COREE_MODEL_DIR") {
+            std::path::PathBuf::from(dir)
+        } else {
+            let dir = dirs::cache_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from(".cache"))
+                .join("coree")
+                .join("models");
+            if !dir.exists() {
+                eprintln!(
+                    "[coree] Downloading embedding model (~22MB) on first run. This may take a minute..."
+                );
+            }
+            dir
+        };
 
         // COREE_FORCE_MODEL_REFRESH=1: delete the model cache before loading so
         // fastembed re-downloads a fresh copy. Useful for troubleshooting a

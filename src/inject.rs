@@ -127,7 +127,7 @@ async fn run_inner(
     // the AI can surface the setup instructions to the user.
     if config.project_id.is_none() {
         if inject_type == "session" || inject_type == "compact" {
-            let suggested = crate::project_id::infer(&config.project_root);
+            let suggested = crate::project_id::infer(config.project_root());
             println!(
                 "[coree] coree has loaded, but there is no `.coree.toml` configuration \
                  file for this project, so memories will not be stored or retrieved this \
