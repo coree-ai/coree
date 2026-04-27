@@ -149,6 +149,19 @@ fn ensure_hook(root: &mut Value, event: &str, command: &str) -> Result<bool> {
     Ok(true)
 }
 
+fn write_settings(path: &Path, value: &Value) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let text = serde_json::to_string_pretty(value)? + "\n";
+    // Write to a temp file then rename for atomicity - avoids a corrupt
+    // settings.json on crash or disk-full mid-write.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &text).with_context(|| format!("Failed to write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("Failed to rename {} to {}", tmp.display(), path.display()))
+}
+
 fn settings_path() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not determine home directory")?;
     Ok(home.join(".claude").join("settings.json"))
@@ -231,17 +244,4 @@ mod tests {
         let result = ensure_hook(&mut root, "SessionStart", "cmd");
         assert!(result.is_err());
     }
-}
-
-fn write_settings(path: &Path, value: &Value) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let text = serde_json::to_string_pretty(value)? + "\n";
-    // Write to a temp file then rename for atomicity - avoids a corrupt
-    // settings.json on crash or disk-full mid-write.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &text).with_context(|| format!("Failed to write {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("Failed to rename {} to {}", tmp.display(), path.display()))
 }

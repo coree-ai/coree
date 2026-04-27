@@ -633,6 +633,12 @@ pub async fn evict_stale(conn: &Connection, project_id: &str) -> Result<u64> {
     Ok(conn.execute(&sql, params_from_iter(params)).await?)
 }
 
+fn days_since(datetime_str: &str, now: &chrono::DateTime<Utc>) -> f64 {
+    chrono::DateTime::parse_from_rfc3339(datetime_str)
+        .map(|dt| (*now - dt.with_timezone(&Utc)).num_seconds() as f64 / 86400.0)
+        .unwrap_or(0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -703,10 +709,4 @@ mod tests {
         );
         assert_eq!(build_fts_query("not this"), "\"not\"* \"this\"*");
     }
-}
-
-fn days_since(datetime_str: &str, now: &chrono::DateTime<Utc>) -> f64 {
-    chrono::DateTime::parse_from_rfc3339(datetime_str)
-        .map(|dt| (*now - dt.with_timezone(&Utc)).num_seconds() as f64 / 86400.0)
-        .unwrap_or(0.0)
 }

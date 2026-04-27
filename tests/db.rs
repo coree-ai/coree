@@ -250,12 +250,13 @@ async fn store_and_get_full_roundtrip() {
     assert!(!result.id.is_empty());
     assert!(!result.upserted);
 
-    let mem = coree::retrieve::get_full_batch(&db.conn, &[result.id.clone()], "test-project")
-        .await
-        .unwrap()
-        .into_iter()
-        .next()
-        .unwrap();
+    let mem =
+        coree::retrieve::get_full_batch(&db.conn, std::slice::from_ref(&result.id), "test-project")
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
     assert_eq!(mem.content, "This is a test memory about Rust");
     assert_eq!(mem.memory_type, "decision");
     assert!((mem.importance - 0.7).abs() < 0.001);
@@ -314,11 +315,12 @@ async fn topic_key_upsert_updates_content() {
     assert_eq!(r1.id, r2.id, "upsert should keep the same ID");
     assert!(r2.upserted);
 
-    let mem = coree::retrieve::get_full_batch(&db.conn, &[r1.id.clone()], "test-project")
-        .await
-        .unwrap()
-        .into_iter()
-        .next()
-        .unwrap();
+    let mem =
+        coree::retrieve::get_full_batch(&db.conn, std::slice::from_ref(&r1.id), "test-project")
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
     assert_eq!(mem.content, "Updated content");
 }
