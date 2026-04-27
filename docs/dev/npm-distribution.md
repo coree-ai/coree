@@ -139,12 +139,24 @@ Codex `.mcp.json` must whitelist `PWD` in `env_vars` for this to work:
   - Added to `files` array in `package.json`
 - No Apache-2.0 `NOTICE` file required (only needed when redistributing upstream components that had one)
 
-## Open questions
+## Model cache structure
 
-- **Model fetch in CI**: The `publish-npm` job has a TODO for fetching the ONNX model files.
-  Need to determine exact files fastembed writes to `~/.cache/coree/models/` and fetch them
-  from HuggingFace in the CI step. Options: direct HuggingFace download, run coree briefly
-  to trigger download, or upload as GitHub Release asset.
+fastembed writes the HuggingFace hub cache format to `COREE_MODEL_DIR`:
+
+```
+models--Xenova--bge-small-en-v1.5/
+  blobs/          <- actual file content, named by sha hash
+  refs/main       <- commit hash of the snapshot used
+  snapshots/<commit>/
+    config.json              -> symlink to blobs/<sha>
+    tokenizer.json           -> symlink to blobs/<sha>
+    tokenizer_config.json    -> symlink to blobs/<sha>
+    special_tokens_map.json  -> symlink to blobs/<sha>
+    onnx/
+      model.onnx             -> symlink to blobs/<sha256>  (~127MB)
+```
+
+In CI, `python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='Xenova/bge-small-en-v1.5', cache_dir='dist/model')"` creates this exact structure. `generate-npm-packages.mjs` copies it with `verbatimSymlinks: true` to preserve the symlinks. The main package has `preferUnplugged: true` so pnpm/yarn don't zip it.
 
 ## Implementation checklist
 
@@ -155,6 +167,6 @@ Codex `.mcp.json` must whitelist `PWD` in `env_vars` for this to work:
 - [x] Create `scripts/generate-npm-packages.mjs`
 - [x] Extend `release.yml` with `publish-npm` job
 - [x] Update `.claude-plugin/marketplace.json` to npm source
-- [ ] Resolve model fetch in CI (determine exact files fastembed writes to cache dir)
+- [x] Resolve model fetch in CI (huggingface_hub snapshot_download with cache_dir)
 - [ ] Ensure `@coree-ai` npm org exists and `NPM_TOKEN` secret configured in GitHub Actions
 - [ ] End-to-end verify: fresh install via `/plugin install`, confirm no lazy downloads

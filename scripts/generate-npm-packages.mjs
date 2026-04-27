@@ -36,7 +36,9 @@ for (const key of Object.keys(mainManifest.optionalDependencies)) {
 fs.writeFileSync(path.join(MAIN_PKG, 'package.json'), JSON.stringify(mainManifest, null, 2) + '\n');
 
 // Copy model into main package (model fetched by CI before this script runs).
+// verbatimSymlinks: true preserves the HuggingFace hub symlink structure
+// (snapshots/ symlinks -> blobs/) rather than resolving them to copies.
 const modelSrc = path.join(REPO_ROOT, 'dist', 'model');
 const modelDst = path.join(MAIN_PKG, 'model');
-fs.cpSync(modelSrc, modelDst, { recursive: true });
+fs.cpSync(modelSrc, modelDst, { recursive: true, verbatimSymlinks: true });
 console.log('Bundled model into main package.');
