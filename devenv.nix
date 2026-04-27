@@ -5,9 +5,9 @@
 
   languages.rust.enable = true;
 
-  env.TYTO_BINARY_OVERRIDE = "${config.devenv.root}/target/release/tyto";
-  env.TYTO_CHANNEL = "dev";
-  env.RUST_LOG = "tyto=debug";
+  env.COREE_BINARY_OVERRIDE = "${config.devenv.root}/target/release/coree";
+  env.COREE_CHANNEL = "dev";
+  env.RUST_LOG = "coree=debug";
 
   packages = with pkgs; [
     act

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-MCP E2E smoke test for tyto.
+MCP E2E smoke test for coree.
 
-Starts `tyto serve`, sends MCP messages over stdio (NDJSON), verifies:
+Starts `coree serve`, sends MCP messages over stdio (NDJSON), verifies:
   1. initialize handshake
   2. store_memories stores a record
   3. search_memory retrieves the stored record
@@ -75,7 +75,7 @@ def main():
         sys.exit(1)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        with open(os.path.join(tmpdir, ".tyto.toml"), "w") as f:
+        with open(os.path.join(tmpdir, ".coree.toml"), "w") as f:
             f.write('project_id = "e2e-smoke"\n')
 
         proc = subprocess.Popen(

@@ -5,9 +5,9 @@
         "matcher": "*",
         "hooks": [
           {
-            "name": "tyto-inject-session",
+            "name": "coree-inject-session",
             "type": "command",
-            "command": "${extensionPath}/../shared/scripts/tyto.cmd inject --type session"
+            "command": "${extensionPath}/../shared/scripts/coree.cmd inject --type session"
           }
         ]
       }
@@ -17,9 +17,9 @@
         "matcher": "*",
         "hooks": [
           {
-            "name": "tyto-inject-prompt",
+            "name": "coree-inject-prompt",
             "type": "command",
-            "command": "${extensionPath}/../shared/scripts/tyto.cmd inject --type prompt --budget 8000"
+            "command": "${extensionPath}/../shared/scripts/coree.cmd inject --type prompt --budget 8000"
           }
         ]
       }

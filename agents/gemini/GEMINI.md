@@ -1,6 +1,6 @@
-# tyto: Memory and Code Intelligence
+# coree: Memory and Code Intelligence
 
-You are using **tyto**, which provides persistent memory and code intelligence across sessions.
+You are using **coree**, which provides persistent memory and code intelligence across sessions.
 
 ## Core Capabilities
 
@@ -9,7 +9,7 @@ You are using **tyto**, which provides persistent memory and code intelligence a
 
 ## Primary Tool: `search(query)`
 
-**ALWAYS use `mcp_tyto_search` as your primary entry point.**
+**ALWAYS use `mcp_coree_search` as your primary entry point.**
 
 - It performs a hybrid search across both memories and source code.
 - Use it before starting a task to see if there is prior context.
@@ -24,8 +24,8 @@ To keep your memory useful, store findings as they occur:
 - **How-it-works**: After exploring a new subsystem.
 - **Facts**: Stable information about the project.
 
-Use `mcp_tyto_store_memories` to save these findings. Use `importance >= 0.8` for critical decisions or gotchas.
+Use `mcp_coree_store_memories` to save these findings. Use `importance >= 0.8` for critical decisions or gotchas.
 
 ## Notes
 
-For tentative observations during exploration, use `mcp_tyto_capture_note`. These are reviewed at the start of the next session.
+For tentative observations during exploration, use `mcp_coree_capture_note`. These are reviewed at the start of the next session.

@@ -14,8 +14,7 @@ devenv.local.yaml
 # pre-commit
 .pre-commit-config.yaml
 
-.memso/
-.tyto/
+.coree/
 
 # Local secrets (never commit)
 .env

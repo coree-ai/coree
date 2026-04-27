@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-use crate::embed::Embedder;
 use super::git;
 use super::indexer;
+use crate::embed::Embedder;
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(2);
 const DRAIN_INTERVAL: Duration = Duration::from_millis(500);
@@ -35,7 +35,7 @@ pub fn start(
                 }
             };
 
-            crate::mlog!("tyto: file watcher acquired leader lock");
+            crate::mlog!("coree: file watcher acquired leader lock");
 
             // Run source + commit watchers until either returns (error or shutdown).
             if let Err(e) = run_watchers(
@@ -44,14 +44,19 @@ pub fn start(
                 Arc::clone(&embedder),
                 git_history,
                 &extra_excludes,
-            ).await {
-                crate::mlog!("tyto: file watcher stopped: {e:#}");
+            )
+            .await
+            {
+                crate::mlog!("coree: file watcher stopped: {e:#}");
             }
 
             // Release the lock explicitly before sleeping so another process can
             // pick it up immediately if we're not going to re-acquire fast enough.
             drop(lock_file);
-            crate::mlog!("tyto: file watcher released leader lock, retrying in {}s", RETRY_INTERVAL.as_secs());
+            crate::mlog!(
+                "coree: file watcher released leader lock, retrying in {}s",
+                RETRY_INTERVAL.as_secs()
+            );
             tokio::time::sleep(RETRY_INTERVAL).await;
         }
     });
@@ -64,7 +69,9 @@ fn try_acquire_lock(path: &Path) -> Option<std::fs::File> {
         let _ = std::fs::create_dir_all(parent);
     }
     let f = std::fs::OpenOptions::new()
-        .write(true).create(true).truncate(false)
+        .write(true)
+        .create(true)
+        .truncate(false)
         .open(path)
         .ok()?;
     match f.try_lock() {
@@ -134,29 +141,37 @@ async fn run_watchers(
                     if !excludes_src.is_empty() {
                         let rel = path.strip_prefix(&root_src).unwrap_or(&path);
                         let rel_str = rel.to_string_lossy();
-                        if excludes_src.iter().any(|p| indexer::glob_match(p, &rel_str)) {
+                        if excludes_src
+                            .iter()
+                            .any(|p| indexer::glob_match(p, &rel_str))
+                        {
                             continue;
                         }
                     }
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                     if let Some(lang) = crate::index::parser::Lang::from_extension(ext) {
                         if path.exists() {
-                            match indexer::index_file(&root_src, &path, &lang, &conn_src, &emb_src, false).await {
+                            match indexer::index_file(
+                                &root_src, &path, &lang, &conn_src, &emb_src, false,
+                            )
+                            .await
+                            {
                                 Ok(n) if n > 0 => {
                                     let rel = path.strip_prefix(&root_src).unwrap_or(&path);
-                                    crate::mlog!("tyto: reindexed {} ({n} chunks)", rel.display());
+                                    crate::mlog!("coree: reindexed {} ({n} chunks)", rel.display());
                                 }
                                 Ok(_) => {}
                                 Err(e) => {
                                     let rel = path.strip_prefix(&root_src).unwrap_or(&path);
-                                    crate::mlog!("tyto: reindex error {}: {e:#}", rel.display());
+                                    crate::mlog!("coree: reindex error {}: {e:#}", rel.display());
                                 }
                             }
                         } else {
                             // File was deleted.
-                            if let Err(e) = indexer::remove_file(&conn_src, &root_src, &path).await {
+                            if let Err(e) = indexer::remove_file(&conn_src, &root_src, &path).await
+                            {
                                 let rel = path.strip_prefix(&root_src).unwrap_or(&path);
-                                crate::mlog!("tyto: remove_file error {}: {e:#}", rel.display());
+                                crate::mlog!("coree: remove_file error {}: {e:#}", rel.display());
                             }
                         }
                     }
@@ -188,7 +203,7 @@ async fn run_watchers(
                             continue;
                         }
                         if let Err(e) = handle_new_commit(&root_git, &conn_git, git_history).await {
-                            crate::mlog!("tyto: commit index error: {e:#}");
+                            crate::mlog!("coree: commit index error: {e:#}");
                         }
                     }
                     Ok(Err(_)) => continue,
@@ -229,9 +244,10 @@ fn collect_source_paths(event: &notify::Event, root: &Path, dirty: &mut HashSet<
 /// Returns true if this event corresponds to COMMIT_EDITMSG being written.
 fn is_commit_editmsg_event(event: &notify::Event) -> bool {
     matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
-        && event.paths.iter().any(|p| {
-            p.file_name().is_some_and(|n| n == "COMMIT_EDITMSG")
-        })
+        && event
+            .paths
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "COMMIT_EDITMSG"))
 }
 
 /// Update the index after a new git commit: store commit record, update churn counts,
@@ -248,7 +264,9 @@ async fn handle_new_commit(
     let commit = match tokio::task::spawn_blocking({
         let root = root.to_path_buf();
         move || git::head_commit(&root)
-    }).await? {
+    })
+    .await?
+    {
         Some(c) => c,
         None => return Ok(()),
     };
@@ -257,13 +275,15 @@ async fn handle_new_commit(
     conn.execute(
         "INSERT OR IGNORE INTO index_commits (sha, message) VALUES (?1, ?2)",
         (commit.sha.clone(), commit.message.clone()),
-    ).await?;
+    )
+    .await?;
 
     // Find which files were changed in this commit.
     let changed_files = tokio::task::spawn_blocking({
         let root = root.to_path_buf();
         move || git::files_in_head_commit(&root)
-    }).await?;
+    })
+    .await?;
 
     for rel_path in &changed_files {
         // Update churn_count and hotspot_score for all chunks in this file.
@@ -275,15 +295,22 @@ async fn handle_new_commit(
                 let score = git::compute_hotspot_score(&stats);
                 (stats.len() as i64, score)
             }
-        }).await?;
+        })
+        .await?;
 
         conn.execute(
             "UPDATE index_chunks SET churn_count = ?1, hotspot_score = ?2 WHERE file_path = ?3",
             (new_count, new_hotspot, rel_path.clone()),
-        ).await?;
+        )
+        .await?;
 
         // Link all chunks in this file to the new commit.
-        let mut rows = conn.query("SELECT id FROM index_chunks WHERE file_path = ?1", (rel_path.clone(),)).await?;
+        let mut rows = conn
+            .query(
+                "SELECT id FROM index_chunks WHERE file_path = ?1",
+                (rel_path.clone(),),
+            )
+            .await?;
         while let Some(row) = rows.next().await? {
             if let Ok(chunk_id) = row.get::<String>(0)
                 && let Err(e) = conn.execute(
@@ -291,13 +318,13 @@ async fn handle_new_commit(
                     (chunk_id, commit.sha.clone()),
                 ).await
             {
-                crate::mlog!("tyto: chunk_commit link error: {e:#}");
+                crate::mlog!("coree: chunk_commit link error: {e:#}");
             }
         }
     }
 
     crate::mlog!(
-        "tyto: indexed commit {} — {} files updated",
+        "coree: indexed commit {} — {} files updated",
         &commit.sha[..7.min(commit.sha.len())],
         changed_files.len()
     );

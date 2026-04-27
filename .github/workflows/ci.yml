@@ -42,19 +42,19 @@ jobs:
         include:
           - os: ubuntu-latest       # Linux x86_64 (most common deployment target)
             target: x86_64-unknown-linux-gnu
-            binary: tyto
+            binary: coree
           - os: macos-latest        # Apple Silicon (arm64)
             target: aarch64-apple-darwin
-            binary: tyto
+            binary: coree
           - os: ubuntu-24.04-arm   # Linux ARM64 (Graviton, Raspberry Pi, etc.)
             target: aarch64-unknown-linux-gnu
-            binary: tyto
+            binary: coree
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary: tyto.exe
+            binary: coree.exe
           - os: windows-latest      # Copilot+ PCs / Snapdragon X - cross-compile from x86_64
             target: aarch64-pc-windows-msvc
-            binary: tyto.exe
+            binary: coree.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +72,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: tyto-debug-${{ matrix.target }}
+          name: coree-debug-${{ matrix.target }}
           path: target/${{ matrix.target }}/debug/${{ matrix.binary }}
           retention-days: 30

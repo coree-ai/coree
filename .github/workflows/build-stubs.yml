@@ -4,12 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'src/bin/tyto-bootstrap.rs'
+      - 'src/bin/coree-bootstrap.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
   pull_request:
     paths:
-      - 'src/bin/tyto-bootstrap.rs'
+      - 'src/bin/coree-bootstrap.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
   workflow_dispatch:
@@ -27,16 +27,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: tyto-bootstrap-linux-x86_64
+            artifact: coree-bootstrap-linux-x86_64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            artifact: tyto-bootstrap-linux-aarch64
+            artifact: coree-bootstrap-linux-aarch64
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: tyto-bootstrap-macos
+            artifact: coree-bootstrap-macos
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: tyto-bootstrap-windows.exe
+            artifact: coree-bootstrap-windows.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -50,15 +50,15 @@ jobs:
           key: bootstrap-${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --bin tyto-bootstrap --target ${{ matrix.target }}
+        run: cargo build --release --bin coree-bootstrap --target ${{ matrix.target }}
 
       - name: Rename artifact (Unix)
         if: runner.os != 'Windows'
-        run: cp target/${{ matrix.target }}/release/tyto-bootstrap ${{ matrix.artifact }}
+        run: cp target/${{ matrix.target }}/release/coree-bootstrap ${{ matrix.artifact }}
 
       - name: Rename artifact (Windows)
         if: runner.os == 'Windows'
-        run: copy target\${{ matrix.target }}\release\tyto-bootstrap.exe ${{ matrix.artifact }}
+        run: copy target\${{ matrix.target }}\release\coree-bootstrap.exe ${{ matrix.artifact }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -83,29 +83,29 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: tyto-bootstrap-linux-x86_64
+          name: coree-bootstrap-linux-x86_64
           path: agents/shared/bin/
 
       - uses: actions/download-artifact@v4
         with:
-          name: tyto-bootstrap-linux-aarch64
+          name: coree-bootstrap-linux-aarch64
           path: agents/shared/bin/
 
       - uses: actions/download-artifact@v4
         with:
-          name: tyto-bootstrap-macos
+          name: coree-bootstrap-macos
           path: agents/shared/bin/
 
       - uses: actions/download-artifact@v4
         with:
-          name: tyto-bootstrap-windows.exe
+          name: coree-bootstrap-windows.exe
           path: agents/shared/bin/
 
       - name: Set executable permissions
         run: |
-          chmod +x agents/shared/bin/tyto-bootstrap-linux-x86_64
-          chmod +x agents/shared/bin/tyto-bootstrap-linux-aarch64
-          chmod +x agents/shared/bin/tyto-bootstrap-macos
+          chmod +x agents/shared/bin/coree-bootstrap-linux-x86_64
+          chmod +x agents/shared/bin/coree-bootstrap-linux-aarch64
+          chmod +x agents/shared/bin/coree-bootstrap-macos
 
       - name: Commit
         run: |

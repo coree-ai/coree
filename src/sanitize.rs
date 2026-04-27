@@ -86,14 +86,21 @@ mod tests {
 
     #[test]
     fn redacts_jwt() {
-        let s = sanitize("token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c");
+        let s = sanitize(
+            "token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+        );
         assert!(!s.contains("eyJ"), "JWT should be redacted: {s}");
     }
 
     #[test]
     fn redacts_pem_block() {
-        let s = sanitize("key: -----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAK\n-----END RSA PRIVATE KEY-----");
-        assert!(!s.contains("MIIEowIBAAK"), "PEM block should be redacted: {s}");
+        let s = sanitize(
+            "key: -----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAK\n-----END RSA PRIVATE KEY-----",
+        );
+        assert!(
+            !s.contains("MIIEowIBAAK"),
+            "PEM block should be redacted: {s}"
+        );
     }
 
     #[test]
@@ -106,7 +113,10 @@ mod tests {
     fn env_var_redaction_preserves_key_name() {
         let s = sanitize("TOKEN=supersecretvalue1234567");
         assert!(s.contains("TOKEN="), "key name should be preserved: {s}");
-        assert!(!s.contains("supersecretvalue"), "value should be redacted: {s}");
+        assert!(
+            !s.contains("supersecretvalue"),
+            "value should be redacted: {s}"
+        );
         assert!(s.contains("[REDACTED]"));
     }
 

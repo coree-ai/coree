@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::Utc;
-use turso::{params_from_iter, Connection, Value};
 use std::collections::HashMap;
+use turso::{Connection, Value, params_from_iter};
 
 use crate::embed;
 
@@ -9,23 +9,25 @@ const RRF_K: f64 = 60.0;
 
 /// Escape a user query string for use in a SQLite LIKE pattern with ESCAPE '\'.
 fn like_escape(s: &str) -> String {
-    s.replace('\\', r"\\").replace('%', r"\%").replace('_', r"\_")
+    s.replace('\\', r"\\")
+        .replace('%', r"\%")
+        .replace('_', r"\_")
 }
 
 /// Type salience weights for retention scoring.
 fn type_weight(memory_type: &str) -> f64 {
     match memory_type {
-        "decision"         => 0.90,
-        "gotcha"           => 0.88,
-        "preference"       => 0.85,
+        "decision" => 0.90,
+        "gotcha" => 0.88,
+        "preference" => 0.85,
         "problem-solution" => 0.82,
-        "how-it-works"     => 0.75,
-        "trade-off"        => 0.72,
-        "workflow"         => 0.68,
-        "discovery"        => 0.65,
-        "what-changed"     => 0.60,
-        "fact"             => 0.55,
-        _                  => 0.50,
+        "how-it-works" => 0.75,
+        "trade-off" => 0.72,
+        "workflow" => 0.68,
+        "discovery" => 0.65,
+        "what-changed" => 0.60,
+        "fact" => 0.55,
+        _ => 0.50,
     }
 }
 
@@ -135,7 +137,12 @@ pub async fn search(
                  WHERE m.project_id = ?1 AND m.status = 'active' AND v.embed_model = ?2
                  ORDER BY dist
                  LIMIT ?4",
-                (project_id.to_string(), embed::model_id(), blob, (limit * 2) as i64),
+                (
+                    project_id.to_string(),
+                    embed::model_id(),
+                    blob,
+                    (limit * 2) as i64,
+                ),
             )
             .await?;
         let mut rank = 0usize;
@@ -143,14 +150,25 @@ pub async fn search(
         while let Some(row) = rows.next().await? {
             let id: String = row.get(0)?;
             let dist: f64 = row.get(1).unwrap_or(1.0);
-            if top_dist.is_none() { top_dist = Some(dist); }
+            if top_dist.is_none() {
+                top_dist = Some(dist);
+            }
             vector_ranks.insert(id, rank);
             rank += 1;
         }
         let top_dist = top_dist.unwrap_or(1.0);
-        tracing::debug!(elapsed_ms = t.elapsed().as_millis(), results = vector_ranks.len(), top_cosine_dist = format!("{top_dist:.3}"), "vector search");
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_millis(),
+            results = vector_ranks.len(),
+            top_cosine_dist = format!("{top_dist:.3}"),
+            "vector search"
+        );
         if top_dist > MAX_COSINE_DIST {
-            tracing::debug!(top_cosine_dist = format!("{top_dist:.3}"), threshold = MAX_COSINE_DIST, "cosine gate: no relevant memories");
+            tracing::debug!(
+                top_cosine_dist = format!("{top_dist:.3}"),
+                threshold = MAX_COSINE_DIST,
+                "cosine gate: no relevant memories"
+            );
             return Ok(vec![]);
         }
     }
@@ -177,7 +195,11 @@ pub async fn search(
             kw_ranks.insert(id, rank);
             rank += 1;
         }
-        tracing::debug!(elapsed_ms = t.elapsed().as_millis(), results = kw_ranks.len(), "keyword search");
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_millis(),
+            results = kw_ranks.len(),
+            "keyword search"
+        );
     }
 
     // Collect all candidate IDs
@@ -189,7 +211,10 @@ pub async fn search(
     }
 
     if all_ids.is_empty() {
-        tracing::debug!(elapsed_ms = t_total.elapsed().as_millis(), "search total (no candidates)");
+        tracing::debug!(
+            elapsed_ms = t_total.elapsed().as_millis(),
+            "search total (no candidates)"
+        );
         return Ok(vec![]);
     }
 
@@ -203,7 +228,10 @@ pub async fn search(
          FROM memories WHERE id IN ({placeholders}) AND status = 'active'"
     );
     let mut rows = conn
-        .query(&meta_sql, params_from_iter(all_ids.iter().cloned().map(Value::Text)))
+        .query(
+            &meta_sql,
+            params_from_iter(all_ids.iter().cloned().map(Value::Text)),
+        )
         .await?;
 
     let mut scored: Vec<CompactResult> = Vec::new();
@@ -241,14 +269,38 @@ pub async fn search(
         const SALIENCE_ALPHA: f64 = 0.3;
         let score = (rrf_v + rrf_kw) * boost * (1.0 + SALIENCE_ALPHA * ret);
 
-        scored.push(CompactResult { id, memory_type, title, created_at, importance, score, content_len: content_len as usize, facts_json, tags_json, pinned, is_stale });
+        scored.push(CompactResult {
+            id,
+            memory_type,
+            title,
+            created_at,
+            importance,
+            score,
+            content_len: content_len as usize,
+            facts_json,
+            tags_json,
+            pinned,
+            is_stale,
+        });
     }
-    tracing::debug!(elapsed_ms = t.elapsed().as_millis(), candidates = scored.len(), "metadata fetch");
+    tracing::debug!(
+        elapsed_ms = t.elapsed().as_millis(),
+        candidates = scored.len(),
+        "metadata fetch"
+    );
 
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     scored.truncate(limit);
 
-    tracing::debug!(elapsed_ms = t_total.elapsed().as_millis(), results = scored.len(), "search total");
+    tracing::debug!(
+        elapsed_ms = t_total.elapsed().as_millis(),
+        results = scored.len(),
+        "search total"
+    );
     Ok(scored)
 }
 
@@ -268,12 +320,13 @@ pub async fn get_full_batch(
                 importance, access_count, pinned, status, created_at, updated_at
          FROM memories WHERE id IN ({placeholders}) AND project_id = ?"
     );
-    let select_params: Vec<Value> = ids.iter().cloned().map(Value::Text)
+    let select_params: Vec<Value> = ids
+        .iter()
+        .cloned()
+        .map(Value::Text)
         .chain(std::iter::once(Value::Text(project_id.to_string())))
         .collect();
-    let mut rows = conn
-        .query(&sql, params_from_iter(select_params))
-        .await?;
+    let mut rows = conn.query(&sql, params_from_iter(select_params)).await?;
 
     let mut memories = Vec::new();
     while let Some(row) = rows.next().await? {
@@ -303,7 +356,9 @@ pub async fn get_full_batch(
         .chain(ids.iter().cloned().map(Value::Text))
         .chain(std::iter::once(Value::Text(project_id.to_string())))
         .collect();
-    let _ = conn.execute(&update_sql, params_from_iter(update_params)).await;
+    let _ = conn
+        .execute(&update_sql, params_from_iter(update_params))
+        .await;
 
     Ok(memories)
 }
@@ -324,7 +379,10 @@ pub async fn fetch_embeddings(
          JOIN memories m ON m.id = mv.memory_id \
          WHERE mv.memory_id IN ({placeholders}) AND m.project_id = ?"
     );
-    let params: Vec<Value> = ids.iter().cloned().map(Value::Text)
+    let params: Vec<Value> = ids
+        .iter()
+        .cloned()
+        .map(Value::Text)
         .chain(std::iter::once(Value::Text(project_id.to_string())))
         .collect();
     let mut rows = conn.query(&sql, params_from_iter(params)).await?;
@@ -338,7 +396,12 @@ pub async fn fetch_embeddings(
 }
 
 /// Pin or unpin a batch of memories in a single query. Returns the number of rows updated.
-pub async fn pin_batch(conn: &Connection, ids: &[String], project_id: &str, pin: bool) -> Result<u64> {
+pub async fn pin_batch(
+    conn: &Connection,
+    ids: &[String],
+    project_id: &str,
+    pin: bool,
+) -> Result<u64> {
     if ids.is_empty() {
         return Ok(0);
     }
@@ -362,7 +425,10 @@ pub async fn delete_batch(conn: &Connection, ids: &[String], project_id: &str) -
     let sql = format!(
         "UPDATE memories SET status = 'deleted' WHERE id IN ({placeholders}) AND project_id = ?"
     );
-    let params: Vec<Value> = ids.iter().cloned().map(Value::Text)
+    let params: Vec<Value> = ids
+        .iter()
+        .cloned()
+        .map(Value::Text)
         .chain(std::iter::once(Value::Text(project_id.to_string())))
         .collect();
     Ok(conn.execute(&sql, params_from_iter(params)).await?)
@@ -402,11 +468,8 @@ pub async fn list(
         )
         .await?
     } else {
-        conn.query(
-            &sql,
-            (project_id.to_string(), min_importance, ceiling),
-        )
-        .await?
+        conn.query(&sql, (project_id.to_string(), min_importance, ceiling))
+            .await?
     };
 
     let mut candidates: Vec<CompactResult> = Vec::new();
@@ -441,7 +504,11 @@ pub async fn list(
         });
     }
 
-    candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Apply tag filter after scoring; take limit after filtering so callers
     // get up to `limit` results even when tags reduce the candidate set.
@@ -451,7 +518,8 @@ pub async fn list(
             if filter_tags.is_empty() {
                 return true;
             }
-            let tags: Vec<String> = r.tags_json
+            let tags: Vec<String> = r
+                .tags_json
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or_default();
@@ -477,8 +545,15 @@ fn build_fts_query(query: &str) -> String {
     query
         .split_whitespace()
         .filter_map(|w| {
-            let clean: String = w.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
-            if clean.is_empty() { None } else { Some(format!("\"{clean}\"*")) }
+            let clean: String = w
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if clean.is_empty() {
+                None
+            } else {
+                Some(format!("\"{clean}\"*"))
+            }
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -497,10 +572,7 @@ pub struct StaleMemory {
 }
 
 /// Return memories eligible for eviction: not pinned, older than STALE_MIN_AGE_DAYS, retention score below threshold.
-pub async fn list_stale(
-    conn: &Connection,
-    project_id: &str,
-) -> Result<Vec<StaleMemory>> {
+pub async fn list_stale(conn: &Connection, project_id: &str) -> Result<Vec<StaleMemory>> {
     let now = Utc::now();
     let cutoff = (now - chrono::Duration::days(STALE_MIN_AGE_DAYS as i64)).to_rfc3339();
     let mut rows = conn
@@ -537,15 +609,16 @@ pub async fn list_stale(
         }
     }
 
-    stale.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+    stale.sort_by(|a, b| {
+        a.score
+            .partial_cmp(&b.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(stale)
 }
 
 /// Hard-delete all stale memories (those returned by list_stale). Returns count deleted.
-pub async fn evict_stale(
-    conn: &Connection,
-    project_id: &str,
-) -> Result<u64> {
+pub async fn evict_stale(conn: &Connection, project_id: &str) -> Result<u64> {
     let candidates = list_stale(conn, project_id).await?;
     if candidates.is_empty() {
         return Ok(0);
@@ -553,9 +626,7 @@ pub async fn evict_stale(
     let ids: Vec<String> = candidates.into_iter().map(|m| m.id).collect();
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     // Prepend project_id param; WHERE clause double-checks project scope for safety.
-    let sql = format!(
-        "DELETE FROM memories WHERE project_id = ?1 AND id IN ({placeholders})"
-    );
+    let sql = format!("DELETE FROM memories WHERE project_id = ?1 AND id IN ({placeholders})");
     let params: Vec<Value> = std::iter::once(Value::Text(project_id.to_string()))
         .chain(ids.into_iter().map(Value::Text))
         .collect();
@@ -612,7 +683,10 @@ mod tests {
     #[test]
     fn build_fts_query_strips_dots() {
         // "install.rs" -> "\"installrs\"*", "settings.json" -> "\"settingsjson\"*"
-        assert_eq!(build_fts_query("install.rs settings.json"), "\"installrs\"* \"settingsjson\"*");
+        assert_eq!(
+            build_fts_query("install.rs settings.json"),
+            "\"installrs\"* \"settingsjson\"*"
+        );
     }
 
     #[test]
@@ -623,7 +697,10 @@ mod tests {
     #[test]
     fn build_fts_query_quotes_reserved_words() {
         // "and", "or", "not", "near" are FTS5 operators; quoting prevents syntax errors.
-        assert_eq!(build_fts_query("hello and world"), "\"hello\"* \"and\"* \"world\"*");
+        assert_eq!(
+            build_fts_query("hello and world"),
+            "\"hello\"* \"and\"* \"world\"*"
+        );
         assert_eq!(build_fts_query("not this"), "\"not\"* \"this\"*");
     }
 }

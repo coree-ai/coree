@@ -11,7 +11,8 @@ pub fn compact(
     let total = results.len() + omitted;
     let mut header = format!("--- Memory Context ({} results", total);
     if omitted > 0
-        && let Some(path) = omitted_file {
+        && let Some(path) = omitted_file
+    {
         header.push_str(&format!(
             " -- {} included in full in {}",
             omitted,
@@ -52,13 +53,17 @@ pub fn summary(results: &[CompactResult]) -> String {
             "{stale}[{:<18} {:.2}] {:.3}  {}  {}  ~{}c  {}\n",
             r.memory_type, r.importance, r.score, r.id, date, r.content_len, r.title
         ));
-        let facts: Vec<String> = r.facts_json.as_deref()
+        let facts: Vec<String> = r
+            .facts_json
+            .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default();
         for fact in &facts {
             out.push_str(&format!("  - {fact}\n"));
         }
-        let tags: Vec<String> = r.tags_json.as_deref()
+        let tags: Vec<String> = r
+            .tags_json
+            .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default();
         if !tags.is_empty() {
@@ -105,17 +110,20 @@ mod tests {
     #[test]
     fn compact_header_includes_omitted_file_when_set() {
         let results = vec![make_result("id-a", "decision", "A")];
-        let path = std::path::Path::new("/tmp/tyto-session.txt");
+        let path = std::path::Path::new("/tmp/coree-session.txt");
         let out = compact(&results, 5, Some(path));
         assert!(out.contains("6 results"), "total = shown + omitted");
-        assert!(out.contains("tyto-session.txt"), "omitted file path shown");
+        assert!(out.contains("coree-session.txt"), "omitted file path shown");
     }
 
     #[test]
     fn compact_no_omitted_file_mention_when_zero() {
         let results = vec![make_result("id-a", "gotcha", "A gotcha")];
         let out = compact(&results, 0, None);
-        assert!(!out.contains("included in full"), "no omitted-file text when omitted=0");
+        assert!(
+            !out.contains("included in full"),
+            "no omitted-file text when omitted=0"
+        );
     }
 
     #[test]

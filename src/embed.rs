@@ -21,21 +21,21 @@ impl Embedder {
     pub fn load() -> Result<Self> {
         let cache_dir = dirs::cache_dir()
             .unwrap_or_else(|| std::path::PathBuf::from(".cache"))
-            .join("tyto")
+            .join("coree")
             .join("models");
 
         if !cache_dir.exists() {
-            eprintln!("[tyto] Downloading embedding model (~22MB) on first run. This may take a minute...");
+            eprintln!(
+                "[coree] Downloading embedding model (~22MB) on first run. This may take a minute..."
+            );
         }
 
-        // TYTO_FORCE_MODEL_REFRESH=1: delete the model cache before loading so
+        // COREE_FORCE_MODEL_REFRESH=1: delete the model cache before loading so
         // fastembed re-downloads a fresh copy. Useful for troubleshooting a
         // corrupted model or testing the cold-start download path locally.
-        if std::env::var("TYTO_FORCE_MODEL_REFRESH").as_deref() == Ok("1")
-            && cache_dir.exists()
-        {
+        if std::env::var("COREE_FORCE_MODEL_REFRESH").as_deref() == Ok("1") && cache_dir.exists() {
             std::fs::remove_dir_all(&cache_dir)
-                .context("TYTO_FORCE_MODEL_REFRESH: failed to remove model cache")?;
+                .context("COREE_FORCE_MODEL_REFRESH: failed to remove model cache")?;
         }
 
         let model = TextEmbedding::try_new(
@@ -54,8 +54,15 @@ impl Embedder {
             .model
             .embed(vec![text], None)
             .context("Embedding failed")?;
-        tracing::debug!(elapsed_ms = t.elapsed().as_millis(), chars = text.len(), "embed");
-        results.into_iter().next().context("Embedding model returned no results")
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_millis(),
+            chars = text.len(),
+            "embed"
+        );
+        results
+            .into_iter()
+            .next()
+            .context("Embedding model returned no results")
     }
 }
 

@@ -1,26 +1,26 @@
 # Configuration
 
-tyto is zero-config by default. A `.tyto.toml` file in your project root lets you override storage, remote sync, and indexing behaviour.
+coree is zero-config by default. A `.coree.toml` file in your project root lets you override storage, remote sync, and indexing behaviour.
 
 ## File discovery
 
-tyto walks up from the current directory looking for `.tyto.toml`. The first file found wins. If none is found, a global config at the platform config directory is used as a fallback:
+coree walks up from the current directory looking for `.coree.toml`. The first file found wins. If none is found, a global config at the platform config directory is used as a fallback:
 
-- Linux: `~/.config/tyto/config.toml`
-- macOS: `~/Library/Application Support/tyto/config.toml`
-- Windows: `%APPDATA%\tyto\config.toml`
+- Linux: `~/.config/coree/config.toml`
+- macOS: `~/Library/Application Support/coree/config.toml`
+- Windows: `%APPDATA%\coree\config.toml`
 
 The global config is merged with the project config when both exist - useful for setting a Turso backend once across all projects.
 
 ## Environment variables
 
-Any config field can be overridden via environment variable using `TYTO__<SECTION>__<FIELD>` (double underscore as separator):
+Any config field can be overridden via environment variable using `COREE__<SECTION>__<FIELD>` (double underscore as separator):
 
 ```
-TYTO__PROJECT_ID                -> project_id
-TYTO__MEMORY__MODE              -> memory.mode
-TYTO__MEMORY__REMOTE_URL        -> memory.remote_url
-TYTO__MEMORY__REMOTE_AUTH_TOKEN -> memory.remote_auth_token
+COREE__PROJECT_ID                -> project_id
+COREE__MEMORY__MODE              -> memory.mode
+COREE__MEMORY__REMOTE_URL        -> memory.remote_url
+COREE__MEMORY__REMOTE_AUTH_TOKEN -> memory.remote_auth_token
 ```
 
 Env vars take precedence over both the global and project config files.
@@ -61,7 +61,7 @@ Override the base directory for managed-mode storage:
 
 ```toml
 [memory]
-managed_path = "/data/tyto"
+managed_path = "/data/coree"
 ```
 
 #### `local_path`
@@ -71,7 +71,7 @@ Path for `local` mode. Relative paths are resolved from the project root:
 ```toml
 [memory]
 mode = "local"
-local_path = ".tyto/memory.db"  # default when mode = local
+local_path = ".coree/memory.db"  # default when mode = local
 ```
 
 #### `remote_url`
@@ -101,7 +101,7 @@ remote_mode = "replica"  # default: direct
 Auth token for the Turso database. Prefer the environment variable over putting this in the config file:
 
 ```
-TYTO__MEMORY__REMOTE_AUTH_TOKEN=your-token
+COREE__MEMORY__REMOTE_AUTH_TOKEN=your-token
 ```
 
 ---
@@ -147,9 +147,9 @@ exclude = [
 
 By default (managed mode), databases are stored outside the project directory:
 
-- Linux: `~/.local/share/tyto/managed/<encoded-path>/`
-- macOS: `~/Library/Application Support/tyto/managed/<encoded-path>/`
-- Windows: `%APPDATA%\tyto\managed\<encoded-path>\`
+- Linux: `~/.local/share/coree/managed/<encoded-path>/`
+- macOS: `~/Library/Application Support/coree/managed/<encoded-path>/`
+- Windows: `%APPDATA%\coree\managed\<encoded-path>\`
 
 Where `<encoded-path>` is the project root path with `/` replaced by `-` (e.g. `/home/user/myproject` becomes `-home-user-myproject`).
 
@@ -173,7 +173,7 @@ mode = "local"
 
 ### Remote sync with Turso (replica mode)
 
-`.tyto.toml` (safe to commit):
+`.coree.toml` (safe to commit):
 ```toml
 project_id = "my-project"
 
@@ -185,12 +185,12 @@ remote_url = "libsql://your-db.turso.io"
 
 `.envrc` (do not commit):
 ```bash
-export TYTO__MEMORY__REMOTE_AUTH_TOKEN=your-token
+export COREE__MEMORY__REMOTE_AUTH_TOKEN=your-token
 ```
 
 ### Shared backend across all projects (global config)
 
-`~/.config/tyto/config.toml`:
+`~/.config/coree/config.toml`:
 ```toml
 [memory]
 mode = "remote"
@@ -198,7 +198,7 @@ remote_mode = "replica"
 remote_url = "libsql://your-db.turso.io"
 ```
 
-Individual projects only need a `.tyto.toml` with a `project_id`:
+Individual projects only need a `.coree.toml` with a `project_id`:
 ```toml
 project_id = "my-project"
 ```

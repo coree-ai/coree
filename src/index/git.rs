@@ -20,7 +20,8 @@ pub struct CommitStat {
 /// Use this instead of `file_commits` when hotspot scoring is needed.
 pub fn file_commits_with_stats(repo_root: &Path, file_path: &str, limit: usize) -> Vec<CommitStat> {
     let output = match Command::new("git")
-        .arg("-C").arg(repo_root)
+        .arg("-C")
+        .arg(repo_root)
         .arg("log")
         .arg(format!("-n{}", limit * 3))
         .arg("--format=format:%H|%at|%s")
@@ -67,7 +68,12 @@ fn parse_commits_with_stats(output: &str) -> Vec<CommitStat> {
             && parts[0].chars().all(|c| c.is_ascii_hexdigit())
         {
             if let Some((sha, ts, msg)) = current.take() {
-                results.push(CommitStat { sha, timestamp_unix: ts, message: msg, lines_changed });
+                results.push(CommitStat {
+                    sha,
+                    timestamp_unix: ts,
+                    message: msg,
+                    lines_changed,
+                });
                 lines_changed = 0;
             }
             let ts = parts[1].parse::<i64>().unwrap_or(0);
@@ -87,7 +93,12 @@ fn parse_commits_with_stats(output: &str) -> Vec<CommitStat> {
     }
 
     if let Some((sha, ts, msg)) = current {
-        results.push(CommitStat { sha, timestamp_unix: ts, message: msg, lines_changed });
+        results.push(CommitStat {
+            sha,
+            timestamp_unix: ts,
+            message: msg,
+            lines_changed,
+        });
     }
 
     results
@@ -102,12 +113,15 @@ pub fn compute_hotspot_score(commits: &[CommitStat]) -> f64 {
         .unwrap_or_default()
         .as_secs() as i64;
 
-    commits.iter().map(|c| {
-        let age_days = (now_unix - c.timestamp_unix).max(0) as f64 / 86400.0;
-        let decay = (-std::f64::consts::LN_2 * age_days / 180.0).exp();
-        let size_weight = (c.lines_changed as f64 / 100.0).min(3.0);
-        decay * size_weight
-    }).sum()
+    commits
+        .iter()
+        .map(|c| {
+            let age_days = (now_unix - c.timestamp_unix).max(0) as f64 / 86400.0;
+            let decay = (-std::f64::consts::LN_2 * age_days / 180.0).exp();
+            let size_weight = (c.lines_changed as f64 / 100.0).min(3.0);
+            decay * size_weight
+        })
+        .sum()
 }
 
 /// Fetch commits that touched a specific line range in a file (git log -L).
@@ -122,7 +136,8 @@ pub fn symbol_commits(
 ) -> Vec<String> {
     let range = format!("{line_start},{line_end}:{file_path}");
     let output = match Command::new("git")
-        .arg("-C").arg(repo_root)
+        .arg("-C")
+        .arg(repo_root)
         .arg("log")
         .arg(format!("-L{range}"))
         .arg("--no-patch")
@@ -139,7 +154,8 @@ pub fn symbol_commits(
     }
 
     match std::str::from_utf8(&output.stdout) {
-        Ok(s) => s.lines()
+        Ok(s) => s
+            .lines()
             .filter(|l| !l.trim().is_empty())
             .map(|l| l.to_string())
             .collect(),
@@ -194,32 +210,46 @@ pub fn file_commits(repo_root: &Path, file_path: &str, limit: usize) -> Vec<Comm
 /// Returns the SHA and message of the current HEAD commit, or None if not in a git repo.
 pub fn head_commit(repo_root: &Path) -> Option<CommitInfo> {
     let output = Command::new("git")
-        .arg("-C").arg(repo_root)
-        .arg("log").arg("-1").arg("--oneline")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("log")
+        .arg("-1")
+        .arg("--oneline")
         .output()
         .ok()?;
-    if !output.status.success() { return None; }
+    if !output.status.success() {
+        return None;
+    }
     let s = std::str::from_utf8(&output.stdout).ok()?.trim();
     let (sha, msg) = s.split_once(' ')?;
-    Some(CommitInfo { sha: sha.to_string(), message: msg.to_string() })
+    Some(CommitInfo {
+        sha: sha.to_string(),
+        message: msg.to_string(),
+    })
 }
 
 /// Returns relative paths of files changed in HEAD (works for initial commits too).
 pub fn files_in_head_commit(repo_root: &Path) -> Vec<String> {
     let output = match Command::new("git")
-        .arg("-C").arg(repo_root)
+        .arg("-C")
+        .arg(repo_root)
         .args(["diff-tree", "--no-commit-id", "-r", "--name-only", "HEAD"])
         .output()
     {
         Ok(o) => o,
         Err(_) => return vec![],
     };
-    if !output.status.success() { return vec![]; }
+    if !output.status.success() {
+        return vec![];
+    }
     let s = match std::str::from_utf8(&output.stdout) {
         Ok(s) => s,
         Err(_) => return vec![],
     };
-    s.lines().map(|l| l.to_string()).filter(|l| !l.is_empty()).collect()
+    s.lines()
+        .map(|l| l.to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
 }
 
 /// Returns false for noise commits that pollute the history embedding.
@@ -228,7 +258,15 @@ pub(crate) fn is_significant(msg: &str) -> bool {
         return false;
     }
     let lower = msg.to_lowercase();
-    let skip_prefixes = ["merge", "revert", "bump", "wip", "fixup!", "squash!", "chore: bump"];
+    let skip_prefixes = [
+        "merge",
+        "revert",
+        "bump",
+        "wip",
+        "fixup!",
+        "squash!",
+        "chore: bump",
+    ];
     skip_prefixes.iter().all(|p| !lower.starts_with(p))
 }
 
@@ -240,7 +278,9 @@ mod tests {
     fn significant_normal_commit() {
         assert!(is_significant("feat: add user authentication"));
         assert!(is_significant("fix: resolve race condition in indexer"));
-        assert!(is_significant("refactor: extract DbReady into separate struct"));
+        assert!(is_significant(
+            "refactor: extract DbReady into separate struct"
+        ));
     }
 
     #[test]
@@ -267,7 +307,9 @@ mod tests {
     #[test]
     fn prefix_match_is_case_insensitive() {
         assert!(!is_significant("MERGE branch main into dev"));
-        assert!(!is_significant("Revert previous commit because it broke things"));
+        assert!(!is_significant(
+            "Revert previous commit because it broke things"
+        ));
         assert!(!is_significant("Bump serde from 1.0.1 to 1.0.2"));
     }
 

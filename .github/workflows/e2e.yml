@@ -2,8 +2,8 @@ name: E2E
 
 # Verifies the full install chain on every target platform:
 #   1. Build release binary
-#   2. Run tyto.cmd with TYTO_BINARY_OVERRIDE -> verifies tyto.cmd -> tyto-bootstrap -> tyto chain
-#   3. `tyto --version` and `tyto status` smoke tests
+#   2. Run coree.cmd with COREE_BINARY_OVERRIDE -> verifies coree.cmd -> coree-bootstrap -> coree chain
+#   3. `coree --version` and `coree status` smoke tests
 #   4. Inject state and MCP store + search E2E
 
 on:
@@ -24,20 +24,20 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: tyto-linux-x86_64.tar.gz
-            binary: tyto
+            artifact: coree-linux-x86_64.tar.gz
+            binary: coree
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            artifact: tyto-linux-aarch64.tar.gz
-            binary: tyto
+            artifact: coree-linux-aarch64.tar.gz
+            binary: coree
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: tyto-macos-aarch64.tar.gz
-            binary: tyto
+            artifact: coree-macos-aarch64.tar.gz
+            binary: coree
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: tyto-windows-x86_64.zip
-            binary: tyto.exe
+            artifact: coree-windows-x86_64.zip
+            binary: coree.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -56,34 +56,34 @@ jobs:
       - name: Set binary path
         shell: bash
         run: |
-          echo "TYTO_BIN=$GITHUB_WORKSPACE/target/${{ matrix.target }}/release/${{ matrix.binary }}" >> "$GITHUB_ENV"
+          echo "COREE_BIN=$GITHUB_WORKSPACE/target/${{ matrix.target }}/release/${{ matrix.binary }}" >> "$GITHUB_ENV"
 
-      # Verify the full chain: tyto.cmd -> committed tyto-bootstrap -> TYTO_BINARY_OVERRIDE -> tyto
-      - name: Bootstrap chain - tyto.cmd routes to tyto via override
+      # Verify the full chain: coree.cmd -> committed coree-bootstrap -> COREE_BINARY_OVERRIDE -> coree
+      - name: Bootstrap chain - coree.cmd routes to coree via override
         shell: bash
         env:
-          TYTO_BINARY_OVERRIDE: ${{ env.TYTO_BIN }}
-        run: agents/shared/scripts/tyto.cmd --version
+          COREE_BINARY_OVERRIDE: ${{ env.COREE_BIN }}
+        run: agents/shared/scripts/coree.cmd --version
 
       - name: Binary - version
         shell: bash
         run: |
-          "$TYTO_BIN" --version
+          "$COREE_BIN" --version
 
       - name: Binary - status (DB open, migrations, query)
         shell: bash
         run: |
           SMOKE_DIR="$RUNNER_TEMP/smoke"
           mkdir -p "$SMOKE_DIR"
-          printf 'project_id = "e2e-smoke"\n' > "$SMOKE_DIR/.tyto.toml"
-          (cd "$SMOKE_DIR" && "$TYTO_BIN" status)
+          printf 'project_id = "e2e-smoke"\n' > "$SMOKE_DIR/.coree.toml"
+          (cd "$SMOKE_DIR" && "$COREE_BIN" status)
 
       # Deterministic inject state tests - manipulate serve.lock / serve.ready
       # directly instead of racing against the model download window.
       - name: Inject - loading and ready state messages
         shell: bash
-        run: python3 scripts/test_inject_states.py "$TYTO_BIN"
+        run: python3 scripts/test_inject_states.py "$COREE_BIN"
 
       - name: Binary - MCP store + search
         shell: bash
-        run: python3 scripts/e2e_mcp.py "$TYTO_BIN"
+        run: python3 scripts/e2e_mcp.py "$COREE_BIN"

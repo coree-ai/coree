@@ -1,5 +1,5 @@
 {
-  "name": "tyto",
+  "name": "coree",
   "owner": {
     "name": "Michael Alexander",
     "email": "michael@beefsack.com"
@@ -9,10 +9,10 @@
   },
   "plugins": [
     {
-      "name": "tyto",
+      "name": "coree",
       "source": "./agents/claude",
       "description": "Persistent memory and code intelligence for AI agents - stores decisions, discoveries, and gotchas across sessions using local vector + BM25 search.",
-      "homepage": "https://github.com/tyto-ai/tyto",
+      "homepage": "https://github.com/coree-ai/coree",
       "license": "Apache-2.0",
       "keywords": ["memory", "persistence", "mcp", "agent"]
     }

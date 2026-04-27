@@ -1,6 +1,6 @@
-use anyhow::{bail, Context, Result};
+use crate::config::{Config, RemoteMode, StorageMode};
+use anyhow::{Context, Result, bail};
 use turso::{Builder, Connection, Value, params_from_iter};
-use crate::config::{StorageMode, RemoteMode, Config};
 
 pub async fn enable(
     config: &Config,
@@ -16,32 +16,45 @@ pub async fn enable(
         bail!("Local database not found at {}", local_path.display());
     }
 
-    println!("tyto remote enable");
+    println!("coree remote enable");
     println!("==================");
     println!();
-    println!("NOTE: Ensure Claude Code (tyto serve) is not running before proceeding.");
+    println!("NOTE: Ensure Claude Code (coree serve) is not running before proceeding.");
     println!("      Concurrent writes during migration can result in data loss.");
     println!();
 
-    println!("[1/6] Opening local database at {} ...", local_path.display());
-    let local_db = Builder::new_local(local_path.to_str().context("local path is not valid UTF-8")?)
-        .build()
-        .await
-        .context("Failed to open local DB")?;
-    let local = local_db.connect().context("Failed to connect to local DB")?;
+    println!(
+        "[1/6] Opening local database at {} ...",
+        local_path.display()
+    );
+    let local_db = Builder::new_local(
+        local_path
+            .to_str()
+            .context("local path is not valid UTF-8")?,
+    )
+    .build()
+    .await
+    .context("Failed to open local DB")?;
+    let local = local_db
+        .connect()
+        .context("Failed to connect to local DB")?;
 
     println!("[2/6] Flushing WAL to ensure all data is captured ...");
-    local.execute("PRAGMA wal_checkpoint(TRUNCATE)", ()).await
+    local
+        .execute("PRAGMA wal_checkpoint(TRUNCATE)", ())
+        .await
         .context("Failed to checkpoint WAL")?;
 
     println!("[3/6] Connecting to remote at {} ...", url);
     // Limbo 0.6.0 does not yet support direct remote client mode.
     // We use a temporary file replica as a workaround. TempDir auto-cleans on drop.
-    let tmp = tempfile::Builder::new().prefix("tyto-remote-migrate-").tempdir()
+    let tmp = tempfile::Builder::new()
+        .prefix("coree-remote-migrate-")
+        .tempdir()
         .context("Failed to create temp dir for remote migration")?;
     let path = tmp.path().join("remote.db");
     let path_str = path.to_str().context("temp path is not valid UTF-8")?;
-    
+
     let remote_db = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         turso::sync::Builder::new_remote(path_str)
@@ -50,11 +63,14 @@ pub async fn enable(
             .build(),
     )
     .await
-    .map_err(|_| anyhow::anyhow!(
-        "Timed out connecting to remote at {url} (10s). Check the URL and token."
-    ))
+    .map_err(|_| {
+        anyhow::anyhow!("Timed out connecting to remote at {url} (10s). Check the URL and token.")
+    })
     .and_then(|r| r.context("Failed to connect to remote - check the URL and token"))?;
-    let remote = remote_db.connect().await.context("Failed to connect to remote DB")?;
+    let remote = remote_db
+        .connect()
+        .await
+        .context("Failed to connect to remote DB")?;
 
     println!("[4/6] Running migrations on remote database ...");
     crate::migrations::run(&remote).await?;
@@ -62,9 +78,7 @@ pub async fn enable(
     if !force {
         let count = row_count(&remote, "memories").await?;
         if count > 0 {
-            bail!(
-                "Remote database already has {count} memories. Use --force to overwrite."
-            );
+            bail!("Remote database already has {count} memories. Use --force to overwrite.");
         }
     }
 
@@ -81,7 +95,9 @@ pub async fn enable(
     println!("      Local backup retained at {}", local_path.display());
 
     println!();
-    println!("Done. Set TYTO__MEMORY__REMOTE_AUTH_TOKEN in your environment and restart Claude Code.");
+    println!(
+        "Done. Set COREE__MEMORY__REMOTE_AUTH_TOKEN in your environment and restart Claude Code."
+    );
 
     Ok(())
 }
@@ -95,9 +111,12 @@ pub async fn enable(
 /// 3. local memory.db exists (the natural backup left in place by `remote enable`)
 pub async fn sync(config: &Config, force: bool) -> Result<String> {
     let s = &config.memory.storage;
-    if !matches!((&s.mode, &s.remote_mode), (StorageMode::Remote, RemoteMode::Replica)) {
+    if !matches!(
+        (&s.mode, &s.remote_mode),
+        (StorageMode::Remote, RemoteMode::Replica)
+    ) {
         return Ok(
-            "Not in remote/replica mode. Run `tyto remote enable` first to configure cloud sync."
+            "Not in remote/replica mode. Run `coree remote enable` first to configure cloud sync."
                 .to_string(),
         );
     }
@@ -109,7 +128,7 @@ pub async fn sync(config: &Config, force: bool) -> Result<String> {
     let token = s
         .remote_auth_token
         .as_deref()
-        .context("remote replica mode requires memory.remote_auth_token (set TYTO__MEMORY__REMOTE_AUTH_TOKEN)")?;
+        .context("remote replica mode requires memory.remote_auth_token (set COREE__MEMORY__REMOTE_AUTH_TOKEN)")?;
 
     let local_path = config.local_db_path();
     if !local_path.exists() {
@@ -122,7 +141,9 @@ pub async fn sync(config: &Config, force: bool) -> Result<String> {
     println!("Connecting to remote at {} ...", url);
     // Limbo 0.6.0 does not yet support direct remote client mode.
     // We use a temporary file replica as a workaround. TempDir auto-cleans on drop.
-    let tmp = tempfile::Builder::new().prefix("tyto-remote-sync-").tempdir()
+    let tmp = tempfile::Builder::new()
+        .prefix("coree-remote-sync-")
+        .tempdir()
         .context("Failed to create temp dir for remote sync")?;
     let path = tmp.path().join("remote.db");
     let path_str = path.to_str().context("temp path is not valid UTF-8")?;
@@ -135,9 +156,9 @@ pub async fn sync(config: &Config, force: bool) -> Result<String> {
             .build(),
     )
     .await
-    .map_err(|_| anyhow::anyhow!(
-        "Timed out connecting to remote at {url} (10s). Check the URL and token."
-    ))
+    .map_err(|_| {
+        anyhow::anyhow!("Timed out connecting to remote at {url} (10s). Check the URL and token.")
+    })
     .and_then(|r| r.context("Failed to connect to remote DB"))?;
     let remote = remote_db.connect().await?;
 
@@ -152,10 +173,14 @@ pub async fn sync(config: &Config, force: bool) -> Result<String> {
     }
 
     println!("Opening local database at {} ...", local_path.display());
-    let local_db = Builder::new_local(local_path.to_str().context("local path is not valid UTF-8")?)
-        .build()
-        .await
-        .context("Failed to open local DB")?;
+    let local_db = Builder::new_local(
+        local_path
+            .to_str()
+            .context("local path is not valid UTF-8")?,
+    )
+    .build()
+    .await
+    .context("Failed to open local DB")?;
     let local = local_db.connect()?;
 
     let local_count = row_count(&local, "memories").await?;
@@ -183,12 +208,9 @@ async fn copy_all_verbose(
     Ok((memories, vectors, captures))
 }
 
-
 async fn row_count(conn: &Connection, table: &str) -> Result<i64> {
     let sql = format!("SELECT COUNT(*) FROM {table}");
-    let mut rows: turso::Rows = conn
-        .query(&sql, ())
-        .await?;
+    let mut rows: turso::Rows = conn.query(&sql, ()).await?;
     let count = rows
         .next()
         .await?
@@ -217,7 +239,7 @@ async fn copy_memories(local: &Connection, remote: &Connection, total: i64) -> R
                      importance, access_count, last_accessed, pinned, status,
                      session_id, source, created_at, updated_at, content_hash)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
-                // GOTCHA: The Turso Rust driver's IntoParams trait is only implemented for 
+                // GOTCHA: The Turso Rust driver's IntoParams trait is only implemented for
                 // tuples up to size 16. For this 18-column insert, we must use params_from_iter.
                 params_from_iter(vec![
                     Value::Text(row.get::<String>(0)?),
@@ -306,7 +328,7 @@ fn update_config(config: &Config, remote_url: &str) -> Result<()> {
     let config_path = config
         .source_path
         .clone()
-        .unwrap_or_else(|| config.project_root.join(".tyto.toml"));
+        .unwrap_or_else(|| config.project_root.join(".coree.toml"));
 
     let existing = if config_path.exists() {
         std::fs::read_to_string(&config_path)

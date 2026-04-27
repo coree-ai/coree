@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
-use turso::{Connection, Database};
 use std::path::Path;
+use turso::{Connection, Database};
 
-use crate::{config::{StorageMode, RemoteMode, Config}, mlog};
+use crate::{
+    config::{Config, RemoteMode, StorageMode},
+    mlog,
+};
 
 pub enum AnyDb {
     Local(Database),
@@ -25,12 +28,15 @@ impl Db {
             StorageMode::Managed | StorageMode::Local | StorageMode::Disabled => {
                 let path = config.db_path();
                 ensure_parent_dir(&path)?;
-                let db = turso::Builder::new_local(path.to_str().context("DB path is not valid UTF-8")?)
-                    .experimental_multiprocess_wal(true)
-                    .experimental_index_method(true)
-                    .build()
-                    .await
-                    .with_context(|| format!("Failed to open local DB at {}", path.display()))?;
+                let db =
+                    turso::Builder::new_local(path.to_str().context("DB path is not valid UTF-8")?)
+                        .experimental_multiprocess_wal(true)
+                        .experimental_index_method(true)
+                        .build()
+                        .await
+                        .with_context(|| {
+                            format!("Failed to open local DB at {}", path.display())
+                        })?;
                 (AnyDb::Local(db), None)
             }
             StorageMode::Remote => {
@@ -48,7 +54,7 @@ impl Db {
                         // We use a temporary file replica as a workaround. The TempDir is kept
                         // alive on Db so the directory is cleaned up when the connection closes.
                         let tmp = tempfile::Builder::new()
-                            .prefix("tyto-remote-direct-")
+                            .prefix("coree-remote-direct-")
                             .tempdir()
                             .context("Failed to create temp dir for direct-mode replica")?;
                         let path = tmp.path().join("memory.db");
@@ -59,8 +65,11 @@ impl Db {
                     RemoteMode::Replica => {
                         let path = config.db_path();
                         ensure_parent_dir(&path)?;
-                        let path_str = path.to_str().context("replica DB path is not valid UTF-8")?;
-                        let db = open_replica_with_recovery(path_str, path.as_ref(), url, token).await?;
+                        let path_str = path
+                            .to_str()
+                            .context("replica DB path is not valid UTF-8")?;
+                        let db =
+                            open_replica_with_recovery(path_str, path.as_ref(), url, token).await?;
                         (AnyDb::Synced(db), None)
                     }
                 }
@@ -69,7 +78,10 @@ impl Db {
 
         let conn = match &any_db {
             AnyDb::Local(db) => db.connect().context("Failed to connect to database")?,
-            AnyDb::Synced(db) => db.connect().await.context("Failed to connect to synced database")?,
+            AnyDb::Synced(db) => db
+                .connect()
+                .await
+                .context("Failed to connect to synced database")?,
         };
 
         // Apply busy_timeout to all modes. Replica mode also needs it: the libsql background
@@ -80,7 +92,11 @@ impl Db {
             .context("Failed to set busy_timeout")?;
 
         tracing::debug!(elapsed_ms = t.elapsed().as_millis(), "Db::open");
-        Ok(Self { conn, handle: any_db, temp_dir })
+        Ok(Self {
+            conn,
+            handle: any_db,
+            temp_dir,
+        })
     }
 }
 
@@ -92,9 +108,9 @@ async fn open_replica_with_recovery(
 ) -> Result<turso::sync::Database> {
     let build = || async {
         let mut last_err = None;
-        // GOTCHA: In Turso 0.6.0-pre.22, 'experimental_multiprocess_wal' is NOT available 
+        // GOTCHA: In Turso 0.6.0-pre.22, 'experimental_multiprocess_wal' is NOT available
         // for synced replicas. Only one process can have a replica open at a time.
-        // We use a high retry count (20 attempts / 5s) to handle process handovers during 
+        // We use a high retry count (20 attempts / 5s) to handle process handovers during
         // quick restarts, allowing the previous process time to fully exit and release the lock.
         for i in 0..20 {
             match turso::sync::Builder::new_remote(path_str)
@@ -107,13 +123,16 @@ async fn open_replica_with_recovery(
                 Err(e) => {
                     last_err = Some(e);
                     if i % 5 == 0 && i > 0 {
-                        mlog!("tyto: replica build attempt {i} failed, retrying...");
+                        mlog!("coree: replica build attempt {i} failed, retrying...");
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
             }
         }
-        Err(anyhow::anyhow!("Failed to build replica after 20 attempts: {}", last_err.unwrap()))
+        Err(anyhow::anyhow!(
+            "Failed to build replica after 20 attempts: {}",
+            last_err.unwrap()
+        ))
     };
 
     let try_sync = |db: turso::sync::Database| async move {
@@ -122,7 +141,11 @@ async fn open_replica_with_recovery(
         for i in 0..5 {
             match db.pull().await {
                 Ok(_) => {
-                    tracing::debug!(elapsed_ms = t_sync.elapsed().as_millis(), attempts = i + 1, "replica pull success");
+                    tracing::debug!(
+                        elapsed_ms = t_sync.elapsed().as_millis(),
+                        attempts = i + 1,
+                        "replica pull success"
+                    );
                     return Ok(db);
                 }
                 Err(e) => {
@@ -131,7 +154,10 @@ async fn open_replica_with_recovery(
                 }
             }
         }
-        Err(anyhow::anyhow!("Failed to sync replica after 5 attempts: {}", last_err.unwrap()))
+        Err(anyhow::anyhow!(
+            "Failed to sync replica after 5 attempts: {}",
+            last_err.unwrap()
+        ))
     };
 
     let try_open = || async {
@@ -141,19 +167,25 @@ async fn open_replica_with_recovery(
 
     match try_open().await {
         Ok(db) => return Ok(db),
-        Err(e) => mlog!("tyto: CRITICAL: replica open failed ({e:#}). PURGING local replica files to force full resync..."),
+        Err(e) => mlog!(
+            "coree: CRITICAL: replica open failed ({e:#}). PURGING local replica files to force full resync..."
+        ),
     }
 
     purge_replica_files(path)?;
 
     try_open().await.with_context(|| {
-        format!("Failed to open replica DB at {} (after recovery attempt)", path.display())
+        format!(
+            "Failed to open replica DB at {} (after recovery attempt)",
+            path.display()
+        )
     })
 }
 
 pub fn purge_replica_files(path: &Path) -> Result<()> {
     let parent = path.parent().unwrap_or(std::path::Path::new("."));
-    let prefix = path.file_name()
+    let prefix = path
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default()
         .to_string();
@@ -167,7 +199,10 @@ pub fn purge_replica_files(path: &Path) -> Result<()> {
             match std::fs::remove_file(entry.path()) {
                 Ok(()) => tracing::debug!(file = %name_str, "purged replica file"),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e).with_context(|| format!("Failed to remove {}", entry.path().display())),
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("Failed to remove {}", entry.path().display()));
+                }
             }
         }
     }

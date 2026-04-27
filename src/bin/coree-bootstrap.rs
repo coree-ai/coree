@@ -1,37 +1,40 @@
-// Universal tyto entrypoint: exec tyto with any args if installed and current.
+// Universal coree entrypoint: exec coree with any args if installed and current.
 // MCP server mode (no args / "serve"): serve a loading JSON-RPC stub while
-// downloading tyto in the background.
+// downloading coree in the background.
 // Hook mode (inject / stop / compact): print an unavailable message and exit 0
 // immediately - the MCP server instance handles the download.
 //
-// Bundled in agents/shared/bin/ and invoked by agents/shared/scripts/tyto.cmd.
+// Bundled in agents/shared/bin/ and invoked by agents/shared/scripts/coree.cmd.
 
 use std::io::{BufRead, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REPO: &str = "tyto-ai/tyto";
+const REPO: &str = "coree-ai/coree";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     // Dev override: exec directly, pass all args through.
-    if let Some(p) = std::env::var("TYTO_BINARY_OVERRIDE").ok().filter(|p| !p.is_empty()) {
-        exec_tyto(Path::new(&p), &call_args(&args));
+    if let Some(p) = std::env::var("COREE_BINARY_OVERRIDE")
+        .ok()
+        .filter(|p| !p.is_empty())
+    {
+        exec_coree(Path::new(&p), &call_args(&args));
     }
 
     let bin = resolve_binary_path();
     if binary_is_current(&bin) {
-        exec_tyto(&bin, &call_args(&args));
+        exec_coree(&bin, &call_args(&args));
     } else if is_serve(&args) {
         serve_loading(bin);
     } else {
         // Hook invocation (inject / stop / compact): exit gracefully.
         // The MCP server stub is handling the download in the background.
         println!(
-            "[tyto] Memory tools unavailable: tyto is downloading on first install. \
+            "[coree] Memory tools unavailable: coree is downloading on first install. \
              Restart your session once the download completes."
         );
     }
@@ -41,7 +44,7 @@ fn is_serve(args: &[String]) -> bool {
     args.is_empty() || args.first().map(|a| a == "serve").unwrap_or(false)
 }
 
-// Effective args to pass to tyto; defaults to ["serve"] when invoked bare.
+// Effective args to pass to coree; defaults to ["serve"] when invoked bare.
 fn call_args(args: &[String]) -> Vec<String> {
     if args.is_empty() {
         vec!["serve".to_string()]
@@ -55,17 +58,17 @@ fn call_args(args: &[String]) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 fn resolve_binary_path() -> PathBuf {
-    if let Ok(data) = std::env::var("TYTO_PLUGIN_DATA") {
-        return PathBuf::from(data).join(VERSION).join(exe("tyto"));
+    if let Ok(data) = std::env::var("COREE_PLUGIN_DATA") {
+        return PathBuf::from(data).join(VERSION).join(exe("coree"));
     }
     if let Ok(data) = std::env::var("CLAUDE_PLUGIN_DATA") {
-        return PathBuf::from(data).join(VERSION).join(exe("tyto"));
+        return PathBuf::from(data).join(VERSION).join(exe("coree"));
     }
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("tyto")
+        .join("coree")
         .join(VERSION)
-        .join(exe("tyto"))
+        .join(exe("coree"))
 }
 
 fn exe(name: &str) -> String {
@@ -81,15 +84,15 @@ fn binary_is_current(bin: &Path) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Fast path: exec tyto (transparent pass-through)
+// Fast path: exec coree (transparent pass-through)
 // ---------------------------------------------------------------------------
 
-fn exec_tyto(bin: &Path, args: &[String]) -> ! {
+fn exec_coree(bin: &Path, args: &[String]) -> ! {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         let err = std::process::Command::new(bin).args(args).exec();
-        eprintln!("tyto stub: exec failed: {}", err);
+        eprintln!("coree stub: exec failed: {}", err);
         std::process::exit(1);
     }
     #[cfg(not(unix))]
@@ -97,7 +100,7 @@ fn exec_tyto(bin: &Path, args: &[String]) -> ! {
         match std::process::Command::new(bin).args(args).status() {
             Ok(s) => std::process::exit(s.code().unwrap_or(1)),
             Err(e) => {
-                eprintln!("tyto stub: failed to start: {}", e);
+                eprintln!("coree stub: failed to start: {}", e);
                 std::process::exit(1);
             }
         }
@@ -114,10 +117,10 @@ fn serve_loading(bin: PathBuf) {
 
     std::thread::spawn(move || {
         if let Err(e) = download_with_lock(&bin) {
-            eprintln!("tyto stub: {}", e);
+            eprintln!("coree stub: {}", e);
         } else {
             ready2.store(true, Ordering::Release);
-            eprintln!("tyto stub: download complete - restart your session to activate tyto");
+            eprintln!("coree stub: download complete - restart your session to activate coree");
         }
     });
 
@@ -128,7 +131,10 @@ fn download_with_lock(bin: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = bin.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let lock_path = bin.parent().unwrap_or(Path::new(".")).join("tyto.download.lock");
+    let lock_path = bin
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("coree.download.lock");
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -137,7 +143,7 @@ fn download_with_lock(bin: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     if lock_file.try_lock().is_err() {
         // Another stub instance is already downloading; poll until it finishes.
-        eprintln!("tyto stub: download in progress in another instance, waiting...");
+        eprintln!("coree stub: download in progress in another instance, waiting...");
         for _ in 0..600 {
             std::thread::sleep(std::time::Duration::from_millis(500));
             if binary_is_current(bin) {
@@ -147,7 +153,7 @@ fn download_with_lock(bin: &Path) -> Result<(), Box<dyn std::error::Error>> {
         return Err("timeout waiting for concurrent download to complete".into());
     }
 
-    let result = download_tyto(bin);
+    let result = download_coree(bin);
     let _ = lock_file.unlock();
     result
 }
@@ -185,9 +191,9 @@ fn run_mcp_server(ready: Arc<AtomicBool>) {
                     "result": {
                         "protocolVersion": proto,
                         "capabilities": { "tools": {} },
-                        "serverInfo": { "name": "tyto", "version": "0.0.0" },
+                        "serverInfo": { "name": "coree", "version": "0.0.0" },
                         "instructions":
-                            "tyto is installing. Call session_context to check download status, \
+                            "coree is installing. Call session_context to check download status, \
                              then restart your session when the binary is ready."
                     }
                 }))
@@ -199,16 +205,16 @@ fn run_mcp_server(ready: Arc<AtomicBool>) {
                 "result": {
                     "tools": [{
                         "name": "session_context",
-                        "description": "Check tyto install status during first-time download.",
+                        "description": "Check coree install status during first-time download.",
                         "inputSchema": { "type": "object", "properties": {} }
                     }]
                 }
             })),
             "tools/call" => {
                 let text = if ready.load(Ordering::Acquire) {
-                    "tyto binary is now ready. Please restart your session to activate memory tools."
+                    "coree binary is now ready. Please restart your session to activate memory tools."
                 } else {
-                    "tyto is downloading its binary for first-time setup (up to ~30 seconds). \
+                    "coree is downloading its binary for first-time setup (up to ~30 seconds). \
                      Please restart your session once the download completes."
                 };
                 Some(serde_json::json!({
@@ -234,17 +240,21 @@ fn run_mcp_server(ready: Arc<AtomicBool>) {
 }
 
 // ---------------------------------------------------------------------------
-// Download and extract tyto binary
+// Download and extract coree binary
 // ---------------------------------------------------------------------------
 
-fn download_tyto(bin: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn download_coree(bin: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let platform = detect_platform()?;
-    let ext = if cfg!(target_os = "windows") { "zip" } else { "tar.gz" };
+    let ext = if cfg!(target_os = "windows") {
+        "zip"
+    } else {
+        "tar.gz"
+    };
     let url = format!(
-        "https://github.com/{}/releases/download/v{}/tyto-{}.{}",
+        "https://github.com/{}/releases/download/v{}/coree-{}.{}",
         REPO, VERSION, platform, ext
     );
-    eprintln!("tyto stub: downloading {}", url);
+    eprintln!("coree stub: downloading {}", url);
 
     if let Some(parent) = bin.parent() {
         std::fs::create_dir_all(parent)?;
@@ -252,7 +262,7 @@ fn download_tyto(bin: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     let bytes = ureq::get(&url).call()?.body_mut().read_to_vec()?;
 
-    let bin_name = exe("tyto");
+    let bin_name = exe("coree");
     let extracted = if cfg!(target_os = "windows") {
         extract_zip(&bytes, &bin_name)?
     } else {

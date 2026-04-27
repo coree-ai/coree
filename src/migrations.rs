@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::Utc;
-use turso::Connection;
 use sha2::{Digest, Sha256};
+use turso::Connection;
 
 use crate::embed;
 
@@ -71,7 +71,9 @@ async fn apply(conn: &Connection, migration: &Migration) -> Result<()> {
     match migration.name {
         "v002_embed_model" => apply_v002(conn, migration).await?,
         "v003_drop_unused" => apply_v003(conn, migration).await?,
-        _ => { conn.execute_batch(migration.sql).await?; }
+        _ => {
+            conn.execute_batch(migration.sql).await?;
+        }
     }
 
     let checksum = sha256(migration.sql);
@@ -107,8 +109,7 @@ async fn apply_v002(conn: &Connection, _migration: &Migration) -> Result<()> {
 
 /// v003: DROP TABLE IF EXISTS is safe; DROP COLUMN with "no such column" idempotency.
 async fn apply_v003(conn: &Connection, _migration: &Migration) -> Result<()> {
-    conn.execute("DROP TABLE IF EXISTS sessions", ())
-        .await?;
+    conn.execute("DROP TABLE IF EXISTS sessions", ()).await?;
     for col in ["confidence", "supersedes"] {
         let sql = format!("ALTER TABLE memories DROP COLUMN {col}");
         if let Err(e) = conn.execute(&sql, ()).await
@@ -125,10 +126,7 @@ async fn apply_v003(conn: &Connection, _migration: &Migration) -> Result<()> {
 async fn seed_from_legacy(conn: &Connection) -> Result<()> {
     // Check if schema_migrations already has entries.
     let mut rows = conn
-        .query(
-            "SELECT COUNT(*) FROM schema_migrations",
-            (),
-        )
+        .query("SELECT COUNT(*) FROM schema_migrations", ())
         .await?;
     let count: i64 = rows
         .next()
@@ -190,7 +188,7 @@ async fn validate_checksum(conn: &Connection, migration: &Migration) -> Result<(
     let current = sha256(migration.sql);
     if stored != current {
         eprintln!(
-            "[tyto] WARNING: migration '{}' checksum mismatch (stored={}, current={}). \
+            "[coree] WARNING: migration '{}' checksum mismatch (stored={}, current={}). \
              The migration file was modified after it was applied.",
             migration.name, stored, current
         );

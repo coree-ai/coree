@@ -1,9 +1,9 @@
 use anyhow::Result;
 use chrono::Utc;
-use turso::Connection;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use turso::Connection;
 use uuid::Uuid;
 
 use crate::{embed, sanitize};
@@ -78,14 +78,22 @@ pub async fn store_memory(
                AND session_id   = ?2
                AND (julianday(?3) - julianday(created_at)) * 86400 < ?4
              LIMIT 1",
-            (hash.clone(), req.session_id.clone(), now_str.clone(), dedup_window_secs),
+            (
+                hash.clone(),
+                req.session_id.clone(),
+                now_str.clone(),
+                dedup_window_secs,
+            ),
         )
         .await?
         .next()
         .await?
     {
         let existing_id: String = row.get(0)?;
-        return Ok(StoreResult { id: existing_id, upserted: false });
+        return Ok(StoreResult {
+            id: existing_id,
+            upserted: false,
+        });
     }
 
     // Topic key upsert
@@ -102,7 +110,7 @@ pub async fn store_memory(
 
         if let Some(ref id) = existing {
             let pinned_val = req.pinned.map(|p| if p { 1i64 } else { 0i64 });
-        conn.execute(
+            conn.execute(
                 "UPDATE memories
                  SET content = ?1, title = ?2, tags = ?3, facts = ?4, importance = ?5,
                      content_hash = ?6, updated_at = ?7, source = COALESCE(?8, source),
@@ -124,15 +132,21 @@ pub async fn store_memory(
             .await?;
 
             // Replace embedding
-            conn.execute("DELETE FROM memory_vectors WHERE memory_id = ?1", (id.clone(),))
-                .await?;
+            conn.execute(
+                "DELETE FROM memory_vectors WHERE memory_id = ?1",
+                (id.clone(),),
+            )
+            .await?;
             conn.execute(
                 "INSERT INTO memory_vectors (memory_id, embed_model, embedding) VALUES (?1, ?2, ?3)",
                 (id.clone(), embed::model_id(), embedding_blob),
             )
             .await?;
 
-            return Ok(StoreResult { id: id.clone(), upserted: true });
+            return Ok(StoreResult {
+                id: id.clone(),
+                upserted: true,
+            });
         }
     }
 
@@ -159,7 +173,10 @@ pub async fn store_memory(
     )
     .await?;
 
-    Ok(StoreResult { id, upserted: false })
+    Ok(StoreResult {
+        id,
+        upserted: false,
+    })
 }
 
 fn content_hash(content: &str) -> String {

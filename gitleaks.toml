@@ -2,7 +2,7 @@
 useDefault = true
 
 [allowlist]
-description = "Tyto project allowlist"
+description = "Coree project allowlist"
 paths = [
     # Test fixtures and documentation examples
     "tests/",
@@ -25,7 +25,7 @@ regex = '''TURSO_AUTH_TOKEN\s*=\s*[A-Za-z0-9_\-\.]{20,}'''
 tags = ["key", "turso"]
 
 [[rules]]
-description = "TYTO env var with credential-like value"
-id = "tyto-credential-env"
-regex = '''TYTO_(TOKEN|AUTH|SECRET|KEY|PASSWORD)\s*=\s*[^\s]{8,}'''
-tags = ["key", "tyto"]
+description = "COREE env var with credential-like value"
+id = "coree-credential-env"
+regex = '''COREE_(TOKEN|AUTH|SECRET|KEY|PASSWORD)\s*=\s*[^\s]{8,}'''
+tags = ["key", "coree"]

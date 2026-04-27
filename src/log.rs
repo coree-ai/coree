@@ -19,7 +19,10 @@ pub fn init(path: &Path) {
         Ok(f) => {
             let _ = LOG_FILE.set(Mutex::new(f));
         }
-        Err(e) => eprintln!("[tyto] WARNING: could not open log file {}: {e}", path.display()),
+        Err(e) => eprintln!(
+            "[coree] WARNING: could not open log file {}: {e}",
+            path.display()
+        ),
     }
 }
 
@@ -43,7 +46,7 @@ pub fn write(msg: &str) {
 /// For the serve process: call init_tracing_to_file() after log::init() so
 /// tracing output lands in the log file rather than the discarded stdio stderr.
 pub fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt};
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("off"));
     let _ = fmt::Subscriber::builder()
         .with_env_filter(filter)
@@ -52,17 +55,19 @@ pub fn init_tracing() {
 }
 
 /// Like init_tracing(), but routes output to the open log file.
-/// Use in `tyto serve` after calling log::init() — the serve process's stderr
+/// Use in `coree serve` after calling log::init() — the serve process's stderr
 /// is not captured by Claude Code, so tracing would be silently discarded otherwise.
 pub fn init_tracing_to_file() {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt};
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("off"));
     // MakeWriter that appends each tracing event to the log file via log::write.
     // Uses a newtype so we can implement tracing_subscriber::fmt::MakeWriter.
     struct LogFileWriter;
     impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogFileWriter {
         type Writer = LogFileWriter;
-        fn make_writer(&'a self) -> Self::Writer { LogFileWriter }
+        fn make_writer(&'a self) -> Self::Writer {
+            LogFileWriter
+        }
     }
     impl std::io::Write for LogFileWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -74,7 +79,9 @@ pub fn init_tracing_to_file() {
             }
             Ok(buf.len())
         }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
     let _ = fmt::Subscriber::builder()
         .with_env_filter(filter)

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use figment::{
-    providers::{Env, Format, Toml},
     Figment,
+    providers::{Env, Format, Toml},
 };
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -49,7 +49,10 @@ impl std::fmt::Debug for StorageConfig {
             .field("mode", &self.mode)
             .field("remote_mode", &self.remote_mode)
             .field("remote_url", &self.remote_url)
-            .field("remote_auth_token", &self.remote_auth_token.as_deref().map(|_| "[REDACTED]"))
+            .field(
+                "remote_auth_token",
+                &self.remote_auth_token.as_deref().map(|_| "[REDACTED]"),
+            )
             .finish()
     }
 }
@@ -72,11 +75,17 @@ pub struct IndexConfig {
     pub exclude: Vec<String>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 impl Default for IndexConfig {
     fn default() -> Self {
-        Self { storage: StorageConfig::default(), git_history: true, exclude: vec![] }
+        Self {
+            storage: StorageConfig::default(),
+            git_history: true,
+            exclude: vec![],
+        }
     }
 }
 
@@ -88,12 +97,12 @@ pub struct Config {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub index: IndexConfig,
-    /// Path the project config (`.tyto.toml`) was loaded from, if any.
+    /// Path the project config (`.coree.toml`) was loaded from, if any.
     /// Used only for `toml_edit` writes -- not for path derivation.
     #[serde(skip)]
     pub source_path: Option<PathBuf>,
     /// Root directory of the project. All paths are derived from this.
-    /// Determined at load time: `.tyto.toml` parent -> nearest `.git/` ancestor -> CWD.
+    /// Determined at load time: `.coree.toml` parent -> nearest `.git/` ancestor -> CWD.
     #[serde(skip)]
     pub project_root: PathBuf,
 }
@@ -101,16 +110,16 @@ pub struct Config {
 impl Config {
     /// Load config with layered precedence: defaults < file < env vars.
     ///
-    /// File resolution: walk up from `start_dir` looking for `.tyto.toml`,
-    /// then fall back to the global config at `$XDG_CONFIG_HOME/tyto/config.toml`.
+    /// File resolution: walk up from `start_dir` looking for `.coree.toml`,
+    /// then fall back to the global config at `$XDG_CONFIG_HOME/coree/config.toml`.
     ///
-    /// Env var mapping: `TYTO__<SECTION>__<FIELD>` overrides `section.field`.
+    /// Env var mapping: `COREE__<SECTION>__<FIELD>` overrides `section.field`.
     /// Double underscore separates nesting levels; single underscore is part of the name.
-    ///   TYTO__MEMORY__MODE              -> memory.mode        (managed|local|remote|disabled)
-    ///   TYTO__MEMORY__REMOTE_MODE       -> memory.remote_mode (direct|replica)
-    ///   TYTO__MEMORY__REMOTE_URL        -> memory.remote_url
-    ///   TYTO__MEMORY__REMOTE_AUTH_TOKEN -> memory.remote_auth_token
-    ///   TYTO__PROJECT_ID                -> project_id
+    ///   COREE__MEMORY__MODE              -> memory.mode        (managed|local|remote|disabled)
+    ///   COREE__MEMORY__REMOTE_MODE       -> memory.remote_mode (direct|replica)
+    ///   COREE__MEMORY__REMOTE_URL        -> memory.remote_url
+    ///   COREE__MEMORY__REMOTE_AUTH_TOKEN -> memory.remote_auth_token
+    ///   COREE__PROJECT_ID                -> project_id
     pub fn load(start_dir: &Path) -> Result<Self> {
         let project_config = find_project_config(start_dir);
         let global_config = global_config_path().filter(|p| p.exists());
@@ -126,9 +135,9 @@ impl Config {
             fig = fig.merge(Toml::file(path));
         }
         // Double underscore is the figment-idiomatic level separator.
-        // TYTO__MEMORY__REMOTE_AUTH_TOKEN -> memory.remote_auth_token
-        // TYTO__PROJECT_ID               -> project_id
-        fig = fig.merge(Env::prefixed("TYTO__").split("__"));
+        // COREE__MEMORY__REMOTE_AUTH_TOKEN -> memory.remote_auth_token
+        // COREE__PROJECT_ID               -> project_id
+        fig = fig.merge(Env::prefixed("COREE__").split("__"));
 
         let mut cfg: Config = fig.extract().context("Failed to load configuration")?;
         cfg.source_path = project_config;
@@ -138,21 +147,22 @@ impl Config {
 
     /// Resolved DB path for the current memory storage mode.
     ///
-    /// - Managed: `{data_dir}/tyto/managed/{encoded_path}/memory.db`
+    /// - Managed: `{data_dir}/coree/managed/{encoded_path}/memory.db`
     /// - Local:   `{local_path}` (relative to project root if not absolute)
     /// - Remote/Replica: managed path (or local_path if set)
     /// - Remote/Direct:  managed path (parent used for serve.lock/ready/crash.log)
     pub fn db_path(&self) -> PathBuf {
         let s = &self.memory.storage;
         match s.mode {
-            StorageMode::Managed | StorageMode::Disabled => {
-                self.managed_base(s).join(encode_project_path(&self.project_root)).join("memory.db")
-            }
-            StorageMode::Local => self.resolve_local_path(s, ".tyto/memory.db"),
+            StorageMode::Managed | StorageMode::Disabled => self
+                .managed_base(s)
+                .join(encode_project_path(&self.project_root))
+                .join("memory.db"),
+            StorageMode::Local => self.resolve_local_path(s, ".coree/memory.db"),
             StorageMode::Remote => match s.remote_mode {
                 RemoteMode::Replica => {
                     if s.local_path.is_some() {
-                        self.resolve_local_path(s, ".tyto/memory.replica.db")
+                        self.resolve_local_path(s, ".coree/memory.replica.db")
                     } else {
                         self.managed_base(s)
                             .join(encode_project_path(&self.project_root))
@@ -169,7 +179,7 @@ impl Config {
         }
     }
 
-    /// Path to the lock file held exclusively by `tyto serve` for its entire lifetime.
+    /// Path to the lock file held exclusively by `coree serve` for its entire lifetime.
     pub fn serve_lock_path(&self) -> PathBuf {
         self.db_path()
             .parent()
@@ -185,7 +195,7 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("index.watcher.lock"))
     }
 
-    /// Path to the ready file written by `tyto serve` once the DB and embedder are loaded.
+    /// Path to the ready file written by `coree serve` once the DB and embedder are loaded.
     pub fn serve_ready_path(&self) -> PathBuf {
         self.db_path()
             .parent()
@@ -193,13 +203,13 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("serve.ready"))
     }
 
-    /// Unix socket path for the local IPC channel between `tyto serve` and `tyto request`.
+    /// Unix socket path for the local IPC channel between `coree serve` and `coree request`.
     /// On Windows the socket path is converted to a named pipe name in serve/request code.
     pub fn serve_socket_path(&self) -> PathBuf {
         self.db_path()
             .parent()
-            .map(|p| p.join("tyto.sock"))
-            .unwrap_or_else(|| PathBuf::from("tyto.sock"))
+            .map(|p| p.join("coree.sock"))
+            .unwrap_or_else(|| PathBuf::from("coree.sock"))
     }
 
     /// Windows named pipe name derived from the socket path (unique per data directory).
@@ -208,7 +218,7 @@ impl Config {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.serve_socket_path().hash(&mut h);
-        format!(r"\\.\pipe\tyto-{:016x}", h.finish())
+        format!(r"\\.\pipe\coree-{:016x}", h.finish())
     }
 
     /// Always returns the effective local DB path regardless of remote mode.
@@ -216,41 +226,50 @@ impl Config {
     pub fn local_db_path(&self) -> PathBuf {
         let s = &self.memory.storage;
         match s.mode {
-            StorageMode::Local => self.resolve_local_path(s, ".tyto/memory.db"),
-            _ => {
-                self.managed_base(s)
-                    .join(encode_project_path(&self.project_root))
-                    .join("memory.db")
-            }
+            StorageMode::Local => self.resolve_local_path(s, ".coree/memory.db"),
+            _ => self
+                .managed_base(s)
+                .join(encode_project_path(&self.project_root))
+                .join("memory.db"),
         }
     }
 
     /// Path to the code intelligence index database.
     ///
-    /// - Managed: `{data_dir}/tyto/managed/{encoded_path}/index.db`
+    /// - Managed: `{data_dir}/coree/managed/{encoded_path}/index.db`
     /// - Local:   `{local_path}` (relative to project root if not absolute)
     pub fn index_db_path(&self) -> PathBuf {
         let s = &self.index.storage;
         match s.mode {
-            StorageMode::Managed | StorageMode::Disabled | StorageMode::Remote => {
-                self.managed_base(s).join(encode_project_path(&self.project_root)).join("index.db")
-            }
-            StorageMode::Local => self.resolve_local_path(s, ".tyto/index.db"),
+            StorageMode::Managed | StorageMode::Disabled | StorageMode::Remote => self
+                .managed_base(s)
+                .join(encode_project_path(&self.project_root))
+                .join("index.db"),
+            StorageMode::Local => self.resolve_local_path(s, ".coree/index.db"),
         }
     }
 
     fn managed_base(&self, s: &StorageConfig) -> PathBuf {
         s.managed_path.clone().unwrap_or_else(|| {
             dirs::data_dir()
-                .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local").join("share"))
-                .join("tyto")
+                .unwrap_or_else(|| {
+                    dirs::home_dir()
+                        .unwrap_or_default()
+                        .join(".local")
+                        .join("share")
+                })
+                .join("coree")
                 .join("managed")
         })
     }
 
     fn resolve_local_path(&self, s: &StorageConfig, default: &str) -> PathBuf {
         let p = s.local_path.as_deref().unwrap_or(Path::new(default));
-        if p.is_absolute() { p.to_path_buf() } else { self.project_root.join(p) }
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            self.project_root.join(p)
+        }
     }
 }
 
@@ -264,7 +283,7 @@ fn encode_project_path(path: &Path) -> String {
 fn find_project_config(start: &Path) -> Option<PathBuf> {
     let mut dir = start.to_path_buf();
     loop {
-        let candidate = dir.join(".tyto.toml");
+        let candidate = dir.join(".coree.toml");
         if candidate.exists() {
             return Some(candidate);
         }
@@ -277,7 +296,7 @@ fn find_project_config(start: &Path) -> Option<PathBuf> {
 /// Determine the project root directory for anchoring paths.
 ///
 /// Walk-up chain:
-/// 1. Parent of the project `.tyto.toml` (if found)
+/// 1. Parent of the project `.coree.toml` (if found)
 /// 2. Nearest ancestor directory containing `.git/`
 /// 3. `start_dir` as final fallback (handles global-config-only and no-git cases)
 fn find_project_root(start_dir: &Path, project_config: Option<&Path>) -> PathBuf {
@@ -297,9 +316,8 @@ fn find_project_root(start_dir: &Path, project_config: Option<&Path>) -> PathBuf
 }
 
 fn global_config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("tyto").join("config.toml"))
+    dirs::config_dir().map(|d| d.join("coree").join("config.toml"))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -313,7 +331,7 @@ mod tests {
         };
         let path = cfg.db_path();
         assert!(path.ends_with("memory.db"));
-        assert!(path.to_string_lossy().contains("tyto"));
+        assert!(path.to_string_lossy().contains("coree"));
         assert!(path.to_string_lossy().contains("-some-project"));
     }
 
@@ -329,7 +347,10 @@ mod tests {
             },
             ..Default::default()
         };
-        assert_eq!(cfg.db_path(), PathBuf::from("/some/project/.tyto/memory.db"));
+        assert_eq!(
+            cfg.db_path(),
+            PathBuf::from("/some/project/.coree/memory.db")
+        );
     }
 
     #[test]
@@ -345,7 +366,10 @@ mod tests {
             },
             ..Default::default()
         };
-        assert_eq!(cfg.db_path(), PathBuf::from("/some/project/custom/memory.db"));
+        assert_eq!(
+            cfg.db_path(),
+            PathBuf::from("/some/project/custom/memory.db")
+        );
     }
 
     #[test]
@@ -356,14 +380,14 @@ mod tests {
         };
         let path = cfg.local_db_path();
         assert!(path.ends_with("memory.db"));
-        assert!(path.to_string_lossy().contains("tyto"));
+        assert!(path.to_string_lossy().contains("coree"));
     }
 
     #[test]
     fn find_project_root_uses_project_config_parent() {
         let root = find_project_root(
             Path::new("/some/subdir"),
-            Some(Path::new("/some/project/.tyto.toml")),
+            Some(Path::new("/some/project/.coree.toml")),
         );
         assert_eq!(root, PathBuf::from("/some/project"));
     }
@@ -376,7 +400,13 @@ mod tests {
 
     #[test]
     fn encode_project_path_replaces_slashes() {
-        assert_eq!(encode_project_path(Path::new("/home/user/project")), "-home-user-project");
-        assert_eq!(encode_project_path(Path::new("/some/project")), "-some-project");
+        assert_eq!(
+            encode_project_path(Path::new("/home/user/project")),
+            "-home-user-project"
+        );
+        assert_eq!(
+            encode_project_path(Path::new("/some/project")),
+            "-some-project"
+        );
     }
 }

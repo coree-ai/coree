@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "tyto": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/../shared/scripts/tyto.cmd"
+    "coree": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/../shared/scripts/coree.cmd"
     }
   }
 }

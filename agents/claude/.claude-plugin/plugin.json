@@ -1,12 +1,12 @@
 {
-  "name": "tyto",
+  "name": "coree",
   "version": "0.8.0-1",
   "description": "Persistent memory and code intelligence for AI agents - stores decisions, discoveries, and gotchas across sessions using local libSQL with vector + BM25 search.",
   "author": {
     "name": "Michael Alexander",
-    "url": "https://github.com/tyto-ai/tyto"
+    "url": "https://github.com/coree-ai/coree"
   },
-  "repository": "https://github.com/tyto-ai/tyto",
+  "repository": "https://github.com/coree-ai/coree",
   "license": "Apache-2.0",
   "keywords": ["memory", "persistence", "mcp", "agent"]
 }

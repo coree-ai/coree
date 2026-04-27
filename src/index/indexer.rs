@@ -6,14 +6,22 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::embed::{self, Embedder};
 use super::git;
 use super::parser::{self, Chunk, Lang};
+use crate::embed::{self, Embedder};
 
 /// Directories and patterns always skipped regardless of .gitignore.
 const ALWAYS_EXCLUDE: &[&str] = &[
-    ".git", "target", "node_modules", "dist", "build",
-    "__pycache__", ".venv", "vendor", ".mypy_cache", ".devenv",
+    ".git",
+    "target",
+    "node_modules",
+    "dist",
+    "build",
+    "__pycache__",
+    ".venv",
+    "vendor",
+    ".mypy_cache",
+    ".devenv",
 ];
 
 pub(crate) fn is_excluded(path: &Path) -> bool {
@@ -23,9 +31,12 @@ pub(crate) fn is_excluded(path: &Path) -> bool {
             return true;
         }
         // Skip generated/lock files
-        if name.ends_with(".min.js") || name.ends_with(".min.css")
-            || name == "package-lock.json" || name == "yarn.lock"
-            || name.ends_with(".lock") || name.ends_with(".sum")
+        if name.ends_with(".min.js")
+            || name.ends_with(".min.css")
+            || name == "package-lock.json"
+            || name == "yarn.lock"
+            || name.ends_with(".lock")
+            || name.ends_with(".sum")
         {
             return true;
         }
@@ -77,17 +88,37 @@ pub async fn run(
         let embedder = Arc::clone(&embedder);
         let project_root = project_root.clone();
 
-        match index_file(&project_root, &file_path, &lang, &conn, &embedder, git_history).await {
+        match index_file(
+            &project_root,
+            &file_path,
+            &lang,
+            &conn,
+            &embedder,
+            git_history,
+        )
+        .await
+        {
             Ok(n) if n > 0 => {
                 result.files_indexed += 1;
                 result.chunks_stored += n;
                 let rel = file_path.strip_prefix(&project_root).unwrap_or(&file_path);
-                crate::mlog!("index: [{}/{}] {} ({} chunks)", i + 1, total, rel.display(), n);
+                crate::mlog!(
+                    "index: [{}/{}] {} ({} chunks)",
+                    i + 1,
+                    total,
+                    rel.display(),
+                    n
+                );
             }
             Ok(_) => {} // unchanged — no log noise
             Err(e) => {
                 let rel = file_path.strip_prefix(&project_root).unwrap_or(&file_path);
-                crate::mlog!("index: [{}/{}] skipped {}: {e}", i + 1, total, rel.display());
+                crate::mlog!(
+                    "index: [{}/{}] skipped {}: {e}",
+                    i + 1,
+                    total,
+                    rel.display()
+                );
             }
         }
 
@@ -95,7 +126,9 @@ pub async fn run(
         if (i + 1) % 50 == 0 {
             crate::mlog!(
                 "index: progress {}/{} files checked, {} indexed so far",
-                i + 1, total, result.files_indexed
+                i + 1,
+                total,
+                result.files_indexed
             );
         }
 
@@ -148,14 +181,24 @@ fn collect_files(root: &Path, extra_excludes: &[String]) -> Result<Vec<(PathBuf,
 }
 
 /// Remove all index data for a deleted file.
-pub(crate) async fn remove_file(conn: &Arc<turso::Connection>, project_root: &Path, file_path: &Path) -> Result<()> {
-    let rel_path = file_path.strip_prefix(project_root)
+pub(crate) async fn remove_file(
+    conn: &Arc<turso::Connection>,
+    project_root: &Path,
+    file_path: &Path,
+) -> Result<()> {
+    let rel_path = file_path
+        .strip_prefix(project_root)
         .unwrap_or(file_path)
         .to_string_lossy()
         .to_string();
-    
-    conn.execute("DELETE FROM index_chunks WHERE file_path = ?1", (rel_path.clone(),)).await?;
-    conn.execute("DELETE FROM index_files WHERE path = ?1", (rel_path,)).await?;
+
+    conn.execute(
+        "DELETE FROM index_chunks WHERE file_path = ?1",
+        (rel_path.clone(),),
+    )
+    .await?;
+    conn.execute("DELETE FROM index_files WHERE path = ?1", (rel_path,))
+        .await?;
     Ok(())
 }
 
@@ -172,16 +215,19 @@ pub(crate) async fn index_file(
     let content_hash = sha256(&source);
 
     // Relative path for storage (deterministic across machines)
-    let rel_path = file_path.strip_prefix(project_root)
+    let rel_path = file_path
+        .strip_prefix(project_root)
         .unwrap_or(file_path)
         .to_string_lossy()
         .to_string();
 
     // Check if file hash has changed
-    let mut rows = conn.query(
-        "SELECT content_hash FROM index_files WHERE path = ?1",
-        (rel_path.clone(),),
-    ).await?;
+    let mut rows = conn
+        .query(
+            "SELECT content_hash FROM index_files WHERE path = ?1",
+            (rel_path.clone(),),
+        )
+        .await?;
     let stored_hash: Option<String> = rows.next().await?.map(|r| r.get(0)).transpose()?;
 
     if stored_hash.as_deref() == Some(&content_hash) {
@@ -189,7 +235,11 @@ pub(crate) async fn index_file(
     }
 
     // Delete old chunks for this file (CASCADE removes vectors and FTS entries)
-    conn.execute("DELETE FROM index_chunks WHERE file_path = ?1", (rel_path.clone(),)).await?;
+    conn.execute(
+        "DELETE FROM index_chunks WHERE file_path = ?1",
+        (rel_path.clone(),),
+    )
+    .await?;
 
     // Parse in blocking thread (tree-sitter is synchronous, CPU-bound)
     let source_clone = source.clone();
@@ -198,7 +248,8 @@ pub(crate) async fn index_file(
     let lang_copy = *lang;
     let chunks: Vec<Chunk> = tokio::task::spawn_blocking(move || {
         parser::parse_file(&source_clone, &rel_path_clone, &lang_copy)
-    }).await?;
+    })
+    .await?;
 
     if chunks.is_empty() {
         // File is indexed but has no extractable symbols (update hash to avoid re-scanning)
@@ -210,7 +261,9 @@ pub(crate) async fn index_file(
     let (commits, hotspot_score) = if git_history {
         let root = project_root.to_path_buf();
         let rel = rel_path.clone();
-        let stats = tokio::task::spawn_blocking(move || git::file_commits_with_stats(&root, &rel, 10)).await?;
+        let stats =
+            tokio::task::spawn_blocking(move || git::file_commits_with_stats(&root, &rel, 10))
+                .await?;
         let score = git::compute_hotspot_score(&stats);
         (stats, score)
     } else {
@@ -220,10 +273,12 @@ pub(crate) async fn index_file(
 
     // Store commit records for history search
     for commit in &commits {
-        let _ = conn.execute(
-            "INSERT OR IGNORE INTO index_commits (sha, message) VALUES (?1, ?2)",
-            (commit.sha.clone(), commit.message.clone()),
-        ).await;
+        let _ = conn
+            .execute(
+                "INSERT OR IGNORE INTO index_commits (sha, message) VALUES (?1, ?2)",
+                (commit.sha.clone(), commit.message.clone()),
+            )
+            .await;
     }
 
     let now = Utc::now().to_rfc3339();
@@ -237,7 +292,8 @@ pub(crate) async fn index_file(
         // Embed with the shared embedder
         let embedding = {
             let mut e = embedder.lock().await;
-            e.embed(&embed_text).map_err(|e| anyhow::anyhow!("embed failed: {e}"))?
+            e.embed(&embed_text)
+                .map_err(|e| anyhow::anyhow!("embed failed: {e}"))?
         };
         let blob = embed::floats_to_blob(&embedding);
 
@@ -249,27 +305,40 @@ pub(crate) async fn index_file(
               churn_count, hotspot_score, indexed_at, content_hash) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             (
-                chunk_id.clone(), rel_path.clone(), chunk.symbol_name.clone(),
-                chunk.qualified_name.clone(), chunk.symbol_kind.clone(),
-                chunk.signature.clone(), chunk.doc_comment.clone(),
-                chunk.body_preview.clone(), chunk.line_start as i64,
-                chunk.line_end as i64, lang_name.clone(), churn_count,
-                hotspot_score, now.clone(), chunk_hash.clone()
+                chunk_id.clone(),
+                rel_path.clone(),
+                chunk.symbol_name.clone(),
+                chunk.qualified_name.clone(),
+                chunk.symbol_kind.clone(),
+                chunk.signature.clone(),
+                chunk.doc_comment.clone(),
+                chunk.body_preview.clone(),
+                chunk.line_start as i64,
+                chunk.line_end as i64,
+                lang_name.clone(),
+                churn_count,
+                hotspot_score,
+                now.clone(),
+                chunk_hash.clone(),
             ),
-        ).await?;
+        )
+        .await?;
 
         conn.execute(
             "INSERT OR REPLACE INTO index_vectors (chunk_id, embed_model, embedding) \
              VALUES (?1, ?2, ?3)",
             (chunk_id.clone(), model_id.clone(), blob),
-        ).await?;
+        )
+        .await?;
 
         for commit in &commits {
-            let _ = conn.execute(
-                "INSERT OR IGNORE INTO index_chunk_commits (chunk_id, commit_sha) \
+            let _ = conn
+                .execute(
+                    "INSERT OR IGNORE INTO index_chunk_commits (chunk_id, commit_sha) \
                  VALUES (?1, ?2)",
-                (chunk_id.clone(), commit.sha.clone()),
-            ).await;
+                    (chunk_id.clone(), commit.sha.clone()),
+                )
+                .await;
         }
 
         stored += 1;
@@ -286,7 +355,8 @@ async fn upsert_file_hash(conn: &Arc<turso::Connection>, path: &str, hash: &str)
         "INSERT OR REPLACE INTO index_files (path, content_hash, indexed_at) \
          VALUES (?1, ?2, ?3)",
         (path.to_string(), hash.to_string(), now),
-    ).await?;
+    )
+    .await?;
     Ok(())
 }
 
@@ -301,7 +371,10 @@ pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
     let pattern = pattern.replace('\\', "/");
     let path = path.replace('\\', "/");
     // "vendor/**" or "vendor/" → anything under that directory
-    if let Some(prefix) = pattern.strip_suffix("/**").or_else(|| pattern.strip_suffix('/')) {
+    if let Some(prefix) = pattern
+        .strip_suffix("/**")
+        .or_else(|| pattern.strip_suffix('/'))
+    {
         return path.starts_with(&format!("{prefix}/")) || path == prefix;
     }
     // "**/foo" → any path component named foo
@@ -321,7 +394,7 @@ mod tests {
 
     #[test]
     fn excluded_builtin_dirs() {
-        assert!(is_excluded(Path::new("target/release/tyto")));
+        assert!(is_excluded(Path::new("target/release/coree")));
         assert!(is_excluded(Path::new("node_modules/react/index.js")));
         assert!(is_excluded(Path::new(".git/objects/pack/foo")));
         assert!(is_excluded(Path::new("__pycache__/foo.pyc")));

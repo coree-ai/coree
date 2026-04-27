@@ -47,15 +47,18 @@ pub async fn search_code(
     // Gracefully degrades to FTS-only if index_vectors is empty or query fails.
     let t_vec = Instant::now();
     let mut vector_ranks: HashMap<String, usize> = HashMap::new();
-    match conn.query(
-        "SELECT ic.id, vector_distance_cos(iv.embedding, vector32(?1)) as dist
+    match conn
+        .query(
+            "SELECT ic.id, vector_distance_cos(iv.embedding, vector32(?1)) as dist
          FROM index_chunks ic
          JOIN index_vectors iv ON iv.chunk_id = ic.id
          WHERE iv.embed_model = ?2
          ORDER BY dist
          LIMIT ?3",
-        (blob, model, k as i64),
-    ).await {
+            (blob, model, k as i64),
+        )
+        .await
+    {
         Ok(mut rows) => {
             let mut rank = 0usize;
             while let Some(row) = rows.next().await? {
@@ -69,7 +72,11 @@ pub async fn search_code(
             tracing::warn!(error = %e, "code vector search failed, falling back to FTS-only");
         }
     }
-    tracing::debug!(elapsed_ms = t_vec.elapsed().as_millis(), results = vector_ranks.len(), "code vector search");
+    tracing::debug!(
+        elapsed_ms = t_vec.elapsed().as_millis(),
+        results = vector_ranks.len(),
+        "code vector search"
+    );
 
     // Stream B: native FTS using turso's fts_match() / fts_score() functions.
     // Syntax: WHERE fts_match(col1, col2, ..., query) — NOT the SQLite FTS5
@@ -100,7 +107,11 @@ pub async fn search_code(
             ranks
         }
     };
-    tracing::debug!(elapsed_ms = t_fts.elapsed().as_millis(), results = fts_ranks.len(), "code fts search");
+    tracing::debug!(
+        elapsed_ms = t_fts.elapsed().as_millis(),
+        results = fts_ranks.len(),
+        "code fts search"
+    );
 
     // Merge candidate IDs from both streams
     let mut all_ids: Vec<String> = vector_ranks.keys().cloned().collect();
@@ -123,12 +134,20 @@ pub async fn search_code(
                 body_preview
          FROM index_chunks WHERE id IN ({placeholders})"
     );
-    let mut rows = conn.query(&sql, turso::params_from_iter(all_ids.clone())).await?;
+    let mut rows = conn
+        .query(&sql, turso::params_from_iter(all_ids.clone()))
+        .await?;
     let mut scored: Vec<CodeResult> = Vec::new();
     while let Some(row) = rows.next().await? {
         let id: String = row.get(0)?;
-        let rrf_v = vector_ranks.get(&id).map(|&r| 1.0 / (RRF_K + r as f64)).unwrap_or(0.0);
-        let rrf_f = fts_ranks.get(&id).map(|&r| 1.0 / (RRF_K + r as f64)).unwrap_or(0.0);
+        let rrf_v = vector_ranks
+            .get(&id)
+            .map(|&r| 1.0 / (RRF_K + r as f64))
+            .unwrap_or(0.0);
+        let rrf_f = fts_ranks
+            .get(&id)
+            .map(|&r| 1.0 / (RRF_K + r as f64))
+            .unwrap_or(0.0);
         scored.push(CodeResult {
             id,
             symbol_name: row.get(1)?,
@@ -149,7 +168,11 @@ pub async fn search_code(
         });
     }
 
-    scored.sort_by(|a, b| b.rrf_score.partial_cmp(&a.rrf_score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.rrf_score
+            .partial_cmp(&a.rrf_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Deduplicate by normalized body hash; keep highest-scoring entry per hash.
     // Iterating in score order means the first occurrence is always the best.
@@ -166,7 +189,11 @@ pub async fn search_code(
     }
     let mut scored = deduped;
     scored.truncate(limit);
-    tracing::debug!(elapsed_ms = t_meta.elapsed().as_millis(), candidates = scored.len(), "code metadata fetch");
+    tracing::debug!(
+        elapsed_ms = t_meta.elapsed().as_millis(),
+        candidates = scored.len(),
+        "code metadata fetch"
+    );
 
     let t_commits = Instant::now();
     let ids: Vec<String> = scored.iter().map(|r| r.id.clone()).collect();
@@ -174,9 +201,16 @@ pub async fn search_code(
     for result in &mut scored {
         result.related_commits = commit_map.get(&result.id).cloned().unwrap_or_default();
     }
-    tracing::debug!(elapsed_ms = t_commits.elapsed().as_millis(), "code commit fetch batch");
+    tracing::debug!(
+        elapsed_ms = t_commits.elapsed().as_millis(),
+        "code commit fetch batch"
+    );
 
-    tracing::debug!(elapsed_ms = t_total.elapsed().as_millis(), results = scored.len(), "search_code total");
+    tracing::debug!(
+        elapsed_ms = t_total.elapsed().as_millis(),
+        results = scored.len(),
+        "search_code total"
+    );
     Ok(scored)
 }
 
@@ -196,7 +230,9 @@ async fn fetch_related_commits_batch(
          WHERE cc.chunk_id IN ({placeholders})
          ORDER BY cc.chunk_id, c.sha"
     );
-    let mut rows = conn.query(&sql, turso::params_from_iter(chunk_ids.iter().cloned())).await?;
+    let mut rows = conn
+        .query(&sql, turso::params_from_iter(chunk_ids.iter().cloned()))
+        .await?;
     let mut result: HashMap<String, Vec<String>> = HashMap::new();
     while let Some(row) = rows.next().await? {
         let chunk_id: String = row.get(0)?;
@@ -210,7 +246,9 @@ async fn fetch_related_commits_batch(
 }
 
 fn body_hash(body: Option<&str>) -> [u8; 32] {
-    let normalized = body.unwrap_or("").lines()
+    let normalized = body
+        .unwrap_or("")
+        .lines()
         .map(|l| l.trim())
         .collect::<Vec<_>>()
         .join("\n");
@@ -282,9 +320,19 @@ pub async fn get_symbol(
 /// Retrieve overall index statistics.
 pub async fn index_stats(conn: &Arc<turso::Connection>) -> Result<(i64, i64)> {
     let mut rows = conn.query("SELECT COUNT(*) FROM index_files", ()).await?;
-    let files = rows.next().await?.map(|r| r.get::<i64>(0)).transpose()?.unwrap_or(0);
+    let files = rows
+        .next()
+        .await?
+        .map(|r| r.get::<i64>(0))
+        .transpose()?
+        .unwrap_or(0);
     let mut rows = conn.query("SELECT COUNT(*) FROM index_chunks", ()).await?;
-    let chunks = rows.next().await?.map(|r| r.get::<i64>(0)).transpose()?.unwrap_or(0);
+    let chunks = rows
+        .next()
+        .await?
+        .map(|r| r.get::<i64>(0))
+        .transpose()?
+        .unwrap_or(0);
     Ok((files, chunks))
 }
 
@@ -297,7 +345,13 @@ pub fn format_result(r: &CodeResult, verbose: bool) -> String {
     };
     let mut out = format!(
         "[{}] {:.3}  {}:{}-{}{} {}\n",
-        r.symbol_kind, r.rrf_score, r.file_path, r.line_start, r.line_end, dup_suffix, r.qualified_name
+        r.symbol_kind,
+        r.rrf_score,
+        r.file_path,
+        r.line_start,
+        r.line_end,
+        dup_suffix,
+        r.qualified_name
     );
     if let Some(ref sig) = r.signature {
         out.push_str(&format!("Signature: {sig}\n"));
@@ -321,7 +375,11 @@ pub fn format_result(r: &CodeResult, verbose: bool) -> String {
     if !r.related_commits.is_empty() {
         out.push_str(&format!(
             "History: {}\n",
-            r.related_commits.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(", ")
+            r.related_commits
+                .iter()
+                .map(|c| format!("\"{c}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     out
@@ -333,8 +391,15 @@ pub(crate) fn build_fts_query(query: &str) -> String {
     query
         .split_whitespace()
         .filter_map(|w| {
-            let clean: String = w.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
-            if clean.is_empty() { None } else { Some(format!("{clean}*")) }
+            let clean: String = w
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if clean.is_empty() {
+                None
+            } else {
+                Some(format!("{clean}*"))
+            }
         })
         .collect::<Vec<_>>()
         .join(" ")

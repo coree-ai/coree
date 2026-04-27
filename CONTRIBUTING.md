@@ -1,4 +1,4 @@
-# Contributing to tyto
+# Contributing to coree
 
 Thank you for your interest in contributing.
 

@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-const MCP_SERVER_NAME: &str = "tyto";
+const MCP_SERVER_NAME: &str = "coree";
 
 fn hook_cmd(bin: &str, suffix: &str) -> String {
     format!("{bin} {suffix}")
@@ -19,21 +19,40 @@ pub struct InstallResult {
 }
 
 pub fn run(dry_run: bool) -> Result<InstallResult> {
-    let binary_path = std::env::current_exe()
-        .context("Could not determine path to tyto binary")?;
+    let binary_path =
+        std::env::current_exe().context("Could not determine path to coree binary")?;
     let bin = binary_path.to_string_lossy();
 
     let path = settings_path()?;
     let mut root = read_or_empty(&path)?;
 
     let mcp_added = ensure_mcp_server(&mut root, &binary_path)?;
-    let session_hook_added = ensure_hook(&mut root, "SessionStart", &hook_cmd(&bin, "inject --type session --budget 32000"))?;
-    let prompt_hook_added = ensure_hook(&mut root, "UserPromptSubmit", &hook_cmd(&bin, "inject --type prompt --budget 32000"))?;
-    let stop_hook_added = ensure_hook(&mut root, "Stop", &hook_cmd(&bin, "inject --type stop --budget 32000"))?;
-    let compact_hook_added = ensure_hook(&mut root, "PostCompact", &hook_cmd(&bin, "inject --type compact --budget 32000"))?;
+    let session_hook_added = ensure_hook(
+        &mut root,
+        "SessionStart",
+        &hook_cmd(&bin, "inject --type session --budget 32000"),
+    )?;
+    let prompt_hook_added = ensure_hook(
+        &mut root,
+        "UserPromptSubmit",
+        &hook_cmd(&bin, "inject --type prompt --budget 32000"),
+    )?;
+    let stop_hook_added = ensure_hook(
+        &mut root,
+        "Stop",
+        &hook_cmd(&bin, "inject --type stop --budget 32000"),
+    )?;
+    let compact_hook_added = ensure_hook(
+        &mut root,
+        "PostCompact",
+        &hook_cmd(&bin, "inject --type compact --budget 32000"),
+    )?;
 
-    let changed = mcp_added || session_hook_added || prompt_hook_added
-        || stop_hook_added || compact_hook_added;
+    let changed = mcp_added
+        || session_hook_added
+        || prompt_hook_added
+        || stop_hook_added
+        || compact_hook_added;
 
     if changed && !dry_run {
         write_settings(&path, &root)?;
@@ -50,7 +69,7 @@ pub fn run(dry_run: bool) -> Result<InstallResult> {
     })
 }
 
-/// Ensure `mcpServers.tyto` exists with the correct command and args.
+/// Ensure `mcpServers.coree` exists with the correct command and args.
 /// Returns true if a change was made.
 fn ensure_mcp_server(root: &mut Value, binary_path: &Path) -> Result<bool> {
     let cmd = binary_path.to_string_lossy();
@@ -104,7 +123,9 @@ fn ensure_hook(root: &mut Value, event: &str, command: &str) -> Result<bool> {
     let already_present = list.iter().any(|entry| {
         // Flat format: {"matcher": "", "hooks": [{"type": "command", "command": "..."}]}
         if let Some(inner) = entry.get("hooks").and_then(|h| h.as_array())
-            && inner.iter().any(|h| h.get("command").and_then(|c| c.as_str()) == Some(command))
+            && inner
+                .iter()
+                .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(command))
         {
             return true;
         }
@@ -153,19 +174,22 @@ mod tests {
     #[test]
     fn ensure_mcp_server_adds_when_absent() {
         let mut root = json!({});
-        let bin = Path::new("/usr/local/bin/tyto");
+        let bin = Path::new("/usr/local/bin/coree");
         let changed = ensure_mcp_server(&mut root, bin).unwrap();
         assert!(changed);
-        assert_eq!(root["mcpServers"]["tyto"]["command"], "/usr/local/bin/tyto");
-        assert_eq!(root["mcpServers"]["tyto"]["args"], json!(["serve"]));
+        assert_eq!(
+            root["mcpServers"]["coree"]["command"],
+            "/usr/local/bin/coree"
+        );
+        assert_eq!(root["mcpServers"]["coree"]["args"], json!(["serve"]));
     }
 
     #[test]
     fn ensure_mcp_server_skips_when_correct() {
         let mut root = json!({
-            "mcpServers": {"tyto": {"type": "stdio", "command": "/usr/local/bin/tyto", "args": ["serve"]}}
+            "mcpServers": {"coree": {"type": "stdio", "command": "/usr/local/bin/coree", "args": ["serve"]}}
         });
-        let bin = Path::new("/usr/local/bin/tyto");
+        let bin = Path::new("/usr/local/bin/coree");
         let changed = ensure_mcp_server(&mut root, bin).unwrap();
         assert!(!changed);
     }
@@ -173,18 +197,19 @@ mod tests {
     #[test]
     fn ensure_mcp_server_fixes_wrong_args() {
         let mut root = json!({
-            "mcpServers": {"tyto": {"type": "stdio", "command": "/usr/local/bin/tyto", "args": ["wrong"]}}
+            "mcpServers": {"coree": {"type": "stdio", "command": "/usr/local/bin/coree", "args": ["wrong"]}}
         });
-        let bin = Path::new("/usr/local/bin/tyto");
+        let bin = Path::new("/usr/local/bin/coree");
         let changed = ensure_mcp_server(&mut root, bin).unwrap();
         assert!(changed, "should overwrite when args are wrong");
-        assert_eq!(root["mcpServers"]["tyto"]["args"], json!(["serve"]));
+        assert_eq!(root["mcpServers"]["coree"]["args"], json!(["serve"]));
     }
 
     #[test]
     fn ensure_hook_adds_when_absent() {
         let mut root = json!({});
-        let changed = ensure_hook(&mut root, "SessionStart", "tyto inject --type session").unwrap();
+        let changed =
+            ensure_hook(&mut root, "SessionStart", "coree inject --type session").unwrap();
         assert!(changed);
         let hooks = root["hooks"]["SessionStart"].as_array().unwrap();
         assert_eq!(hooks.len(), 1);
@@ -192,7 +217,7 @@ mod tests {
 
     #[test]
     fn ensure_hook_skips_when_present() {
-        let cmd = "tyto inject --type session";
+        let cmd = "coree inject --type session";
         let mut root = json!({
             "hooks": {"SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": cmd}]}]}
         });
@@ -216,8 +241,7 @@ fn write_settings(path: &Path, value: &Value) -> Result<()> {
     // Write to a temp file then rename for atomicity - avoids a corrupt
     // settings.json on crash or disk-full mid-write.
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &text)
-        .with_context(|| format!("Failed to write {}", tmp.display()))?;
+    std::fs::write(&tmp, &text).with_context(|| format!("Failed to write {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
         .with_context(|| format!("Failed to rename {} to {}", tmp.display(), path.display()))
 }

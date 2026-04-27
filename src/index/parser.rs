@@ -165,9 +165,17 @@ impl Lang {
 
     pub fn chunking_strategy(&self) -> ChunkingStrategy {
         match self {
-            Self::Css | Self::Json | Self::Html | Self::Yaml | Self::Hcl
-            | Self::Toml | Self::Markdown | Self::EmbeddedTemplate | Self::Diff
-            | Self::Xml | Self::Sql => ChunkingStrategy::Structural,
+            Self::Css
+            | Self::Json
+            | Self::Html
+            | Self::Yaml
+            | Self::Hcl
+            | Self::Toml
+            | Self::Markdown
+            | Self::EmbeddedTemplate
+            | Self::Diff
+            | Self::Xml
+            | Self::Sql => ChunkingStrategy::Structural,
             _ => ChunkingStrategy::Code,
         }
     }
@@ -702,8 +710,10 @@ fn qualified_name_for(node: Node<'_>, name: &str, source: &[u8]) -> String {
             }
             "impl_item" | "trait_item" => {
                 for child in node_children(parent) {
-                    if matches!(child.kind(), "type_identifier" | "generic_type" | "scoped_type_identifier")
-                        && let Ok(type_name) = child.utf8_text(source)
+                    if matches!(
+                        child.kind(),
+                        "type_identifier" | "generic_type" | "scoped_type_identifier"
+                    ) && let Ok(type_name) = child.utf8_text(source)
                     {
                         let base = type_name.split('<').next().unwrap_or(type_name);
                         return format!("{base}::{name}");
@@ -792,7 +802,11 @@ fn extract_doc_comment(node: Node<'_>, source: &[u8]) -> Option<String> {
         }
     }
 
-    if lines.is_empty() { None } else { Some(lines.join("\n")) }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
 }
 
 fn extract_body_preview(node: Node<'_>, source: &[u8], body_kind: &str) -> Option<String> {
@@ -804,7 +818,11 @@ fn extract_body_preview(node: Node<'_>, source: &[u8], body_kind: &str) -> Optio
         .filter(|l| !l.trim().is_empty())
         .take(8)
         .collect();
-    if preview.is_empty() { None } else { Some(preview.join("\n")) }
+    if preview.is_empty() {
+        None
+    } else {
+        Some(preview.join("\n"))
+    }
 }
 
 /// Build the text representation fed to the embedding model.
@@ -835,7 +853,7 @@ pub fn build_embed_text(chunk: &Chunk, file_path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_embed_text, parse_file, Chunk, Lang};
+    use super::{Chunk, Lang, build_embed_text, parse_file};
 
     fn parse_rust(src: &str) -> Vec<Chunk> {
         parse_file(src, "src/lib.rs", &Lang::Rust)
@@ -846,8 +864,15 @@ mod tests {
     }
 
     fn find<'a>(chunks: &'a [Chunk], name: &str) -> &'a Chunk {
-        chunks.iter().find(|c| c.symbol_name == name)
-            .unwrap_or_else(|| panic!("chunk '{name}' not found; got: {:?}", chunks.iter().map(|c| &c.symbol_name).collect::<Vec<_>>()))
+        chunks
+            .iter()
+            .find(|c| c.symbol_name == name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "chunk '{name}' not found; got: {:?}",
+                    chunks.iter().map(|c| &c.symbol_name).collect::<Vec<_>>()
+                )
+            })
     }
 
     #[test]
@@ -891,8 +916,10 @@ impl Counter {
 "#;
         let chunks = parse_rust(src);
         let c = find(&chunks, "increment");
-        assert_eq!(c.qualified_name, "Counter::increment",
-            "method inside impl should get qualified name");
+        assert_eq!(
+            c.qualified_name, "Counter::increment",
+            "method inside impl should get qualified name"
+        );
     }
 
     #[test]
@@ -914,7 +941,10 @@ fn documented() -> i32 { 0 }
         let chunks = parse_rust(src);
         let c = find(&chunks, "documented");
         assert!(
-            c.doc_comment.as_deref().unwrap_or("").contains("This is a doc comment"),
+            c.doc_comment
+                .as_deref()
+                .unwrap_or("")
+                .contains("This is a doc comment"),
             "doc comment should be captured"
         );
     }
@@ -925,9 +955,18 @@ fn documented() -> i32 { 0 }
         let chunks = parse_rust(src);
         let c = find(&chunks, "add");
         let sig = c.signature.as_deref().unwrap_or("");
-        assert!(sig.contains("fn add"), "signature should include fn keyword and name");
-        assert!(sig.contains("-> i32"), "signature should include return type");
-        assert!(!sig.contains("a + b"), "signature must not include function body");
+        assert!(
+            sig.contains("fn add"),
+            "signature should include fn keyword and name"
+        );
+        assert!(
+            sig.contains("-> i32"),
+            "signature should include return type"
+        );
+        assert!(
+            !sig.contains("a + b"),
+            "signature must not include function body"
+        );
     }
 
     #[test]
@@ -957,8 +996,10 @@ fn documented() -> i32 { 0 }
         let src = "class Dog:\n    def bark(self):\n        print('woof')\n";
         let chunks = parse_python(src);
         let c = find(&chunks, "bark");
-        assert_eq!(c.qualified_name, "Dog.bark",
-            "method inside class should get qualified name");
+        assert_eq!(
+            c.qualified_name, "Dog.bark",
+            "method inside class should get qualified name"
+        );
     }
 
     #[test]
@@ -967,7 +1008,10 @@ fn documented() -> i32 { 0 }
         let chunks = parse_python(src);
         let c = find(&chunks, "documented");
         assert!(
-            c.doc_comment.as_deref().unwrap_or("").contains("something useful"),
+            c.doc_comment
+                .as_deref()
+                .unwrap_or("")
+                .contains("something useful"),
             "Python docstring should be captured"
         );
     }
@@ -1082,15 +1126,48 @@ fn documented() -> i32 { 0 }
     fn all_language_queries_compile() {
         use tree_sitter::Query;
         let langs = [
-            Lang::Rust, Lang::Python, Lang::TypeScript, Lang::Tsx, Lang::JavaScript,
-            Lang::Go, Lang::Cpp, Lang::Java, Lang::C, Lang::Bash, Lang::Ruby,
-            Lang::CSharp, Lang::Php, Lang::Scala, Lang::Swift, Lang::Elixir,
-            Lang::Lua, Lang::Haskell, Lang::Nix, Lang::Solidity, Lang::Kotlin,
-            Lang::OCaml, Lang::R, Lang::Zig, Lang::Erlang, Lang::Ql, Lang::Elm,
-            Lang::Powershell, Lang::Dart, Lang::ObjC, Lang::TlaPlus,
-            Lang::Css, Lang::Json, Lang::Html, Lang::Yaml, Lang::Hcl,
-            Lang::Toml, Lang::Markdown, Lang::EmbeddedTemplate, Lang::Diff,
-            Lang::Xml, Lang::Sql,
+            Lang::Rust,
+            Lang::Python,
+            Lang::TypeScript,
+            Lang::Tsx,
+            Lang::JavaScript,
+            Lang::Go,
+            Lang::Cpp,
+            Lang::Java,
+            Lang::C,
+            Lang::Bash,
+            Lang::Ruby,
+            Lang::CSharp,
+            Lang::Php,
+            Lang::Scala,
+            Lang::Swift,
+            Lang::Elixir,
+            Lang::Lua,
+            Lang::Haskell,
+            Lang::Nix,
+            Lang::Solidity,
+            Lang::Kotlin,
+            Lang::OCaml,
+            Lang::R,
+            Lang::Zig,
+            Lang::Erlang,
+            Lang::Ql,
+            Lang::Elm,
+            Lang::Powershell,
+            Lang::Dart,
+            Lang::ObjC,
+            Lang::TlaPlus,
+            Lang::Css,
+            Lang::Json,
+            Lang::Html,
+            Lang::Yaml,
+            Lang::Hcl,
+            Lang::Toml,
+            Lang::Markdown,
+            Lang::EmbeddedTemplate,
+            Lang::Diff,
+            Lang::Xml,
+            Lang::Sql,
         ];
         for lang in &langs {
             let ts_lang = lang.tree_sitter_language();

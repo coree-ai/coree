@@ -1,15 +1,15 @@
 {
-  "name": "tyto",
+  "name": "coree",
   "version": "0.8.0-1",
   "description": "Persistent memory and code intelligence for AI agents",
   "mcpServers": {
-    "tyto": {
-      "command": "${extensionPath}/../shared/scripts/tyto.cmd",
+    "coree": {
+      "command": "${extensionPath}/../shared/scripts/coree.cmd",
       "args": ["serve"],
       "env": {
-        "TYTO_PLUGIN_DATA": "${extensionPath}/data"
+        "COREE_PLUGIN_DATA": "${extensionPath}/data"
       },
-      "description": "tyto MCP server for memory and code intelligence"
+      "description": "coree MCP server for memory and code intelligence"
     }
   },
   "contextFileName": "GEMINI.md",
@@ -17,7 +17,7 @@
     {
       "name": "Remote Auth Token",
       "description": "Auth token for remote Turso database (if using remote storage mode)",
-      "envVar": "TYTO__MEMORY__REMOTE_AUTH_TOKEN",
+      "envVar": "COREE__MEMORY__REMOTE_AUTH_TOKEN",
       "sensitive": true
     }
   ]

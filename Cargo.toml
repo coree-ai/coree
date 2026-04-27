@@ -1,5 +1,5 @@
 [package]
-name = "tyto"
+name = "coree"
 version = "0.8.0"
 edition = "2024"
 license = "Apache-2.0"
@@ -28,7 +28,7 @@ serde_json = "1.0.149"
 # In-place TOML editing that preserves comments and formatting
 toml_edit = "0.25.11"
 
-# Layered configuration: file < env vars, with automatic TYTO__SECTION__FIELD mapping
+# Layered configuration: file < env vars, with automatic COREE__SECTION__FIELD mapping
 figment = { version = "0.10.19", features = ["toml", "env"] }
 
 # UUIDs for session_id and memory IDs

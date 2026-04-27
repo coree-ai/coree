@@ -1,10 +1,14 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tyto::{config::Config, inject, install, remote, request, serve, status};
+use coree::{config::Config, inject, install, remote, request, serve, status};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "tyto", version, about = "Persistent memory and code intelligence for AI agents")]
+#[command(
+    name = "coree",
+    version,
+    about = "Persistent memory and code intelligence for AI agents"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -14,12 +18,16 @@ struct Cli {
 enum Command {
     /// Start the MCP server over stdio
     Serve {
-        #[arg(long, help = "Path to .tyto.toml (default: auto-discover)")]
+        #[arg(long, help = "Path to .coree.toml (default: auto-discover)")]
         config: Option<PathBuf>,
     },
     /// Inject memory context into agent hooks (short-lived, always exits 0)
     Inject {
-        #[arg(long, default_value = "prompt", help = "Injection type: prompt | session | stop | compact")]
+        #[arg(
+            long,
+            default_value = "prompt",
+            help = "Injection type: prompt | session | stop | compact"
+        )]
         r#type: String,
         #[arg(long, help = "Explicit query string (prompt type only)")]
         query: Option<String>,
@@ -27,7 +35,11 @@ enum Command {
         limit: usize,
         #[arg(long, default_value_t = 9500, help = "Max output bytes")]
         budget: usize,
-        #[arg(long, default_value_t = 400, help = "Socket call timeout in milliseconds (0 = no timeout)")]
+        #[arg(
+            long,
+            default_value_t = 400,
+            help = "Socket call timeout in milliseconds (0 = no timeout)"
+        )]
         socket_timeout: u64,
     },
     /// Manage remote database sync
@@ -35,12 +47,12 @@ enum Command {
         #[command(subcommand)]
         subcommand: RemoteCommand,
     },
-    /// Install tyto into Claude Code (adds MCP server + hooks to settings.json)
+    /// Install coree into Claude Code (adds MCP server + hooks to settings.json)
     Install {
         #[arg(long, help = "Preview changes without writing anything")]
         dry_run: bool,
     },
-    /// Call an MCP tool on the running tyto serve instance via the local socket
+    /// Call an MCP tool on the running coree serve instance via the local socket
     Request {
         #[arg(help = "Tool name to call")]
         tool: String,
@@ -74,7 +86,9 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Serve { config: config_path } => {
+        Command::Serve {
+            config: config_path,
+        } => {
             // init_tracing_to_file() is called inside serve::run() after log::init(),
             // so tracing output lands in the log file rather than discarded stderr.
             let cwd = std::env::current_dir()?;
@@ -85,10 +99,16 @@ async fn main() -> Result<()> {
             let config = Config::load(start)?;
             serve::run(config).await?;
         }
-        Command::Inject { r#type, query, limit, budget, socket_timeout } => {
-            tyto::log::init_tracing();
+        Command::Inject {
+            r#type,
+            query,
+            limit,
+            budget,
+            socket_timeout,
+        } => {
+            coree::log::init_tracing();
             if let Err(e) = inject::run(&r#type, query, limit, budget, socket_timeout).await {
-                eprintln!("tyto inject error: {e}");
+                eprintln!("coree inject error: {e}");
             }
         }
         Command::Remote { subcommand } => {
@@ -108,9 +128,12 @@ async fn main() -> Result<()> {
             let result = install::run(dry_run)?;
             let prefix = if dry_run { "[dry-run] " } else { "" };
             if result.mcp_added {
-                println!("{prefix}Added MCP server 'tyto' to {}", result.settings_path.display());
+                println!(
+                    "{prefix}Added MCP server 'coree' to {}",
+                    result.settings_path.display()
+                );
             } else {
-                println!("MCP server 'tyto' already configured - skipped");
+                println!("MCP server 'coree' already configured - skipped");
             }
             if result.session_hook_added {
                 println!("{prefix}Added SessionStart hook");
@@ -132,19 +155,23 @@ async fn main() -> Result<()> {
             } else {
                 println!("PostCompact hook already configured - skipped");
             }
-            if !result.mcp_added && !result.session_hook_added && !result.prompt_hook_added
-                && !result.stop_hook_added && !result.compact_hook_added {
-                println!("Nothing to do - tyto is already fully configured.");
+            if !result.mcp_added
+                && !result.session_hook_added
+                && !result.prompt_hook_added
+                && !result.stop_hook_added
+                && !result.compact_hook_added
+            {
+                println!("Nothing to do - coree is already fully configured.");
             } else if !dry_run {
                 println!("\nDone. Restart Claude Code for changes to take effect.");
             }
         }
         Command::Request { tool, args } => {
-            tyto::log::init_tracing();
+            coree::log::init_tracing();
             let cwd = std::env::current_dir()?;
             let config = Config::load(&cwd)?;
             if let Err(e) = request::run(&config, &tool, args.as_deref()).await {
-                eprintln!("tyto request error: {e}");
+                eprintln!("coree request error: {e}");
                 std::process::exit(1);
             }
         }

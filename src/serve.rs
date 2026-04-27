@@ -1,16 +1,20 @@
+use crate::mlog;
 use anyhow::Result;
 use chrono::Utc;
-use crate::mlog;
 use rmcp::{
     RoleServer, ServerHandler, ServiceExt,
-    handler::server::{router::{tool::ToolRouter, prompt::PromptRouter}, wrapper::Parameters},
+    handler::server::{
+        router::{prompt::PromptRouter, tool::ToolRouter},
+        wrapper::Parameters,
+    },
     model::{
         GetPromptRequestParams, GetPromptResult, Implementation, InitializeResult,
         ListPromptsResult, PaginatedRequestParams, PromptMessage, PromptMessageRole,
         ServerCapabilities,
     },
-    prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router,
+    prompt, prompt_handler, prompt_router,
     service::RequestContext,
+    tool, tool_handler, tool_router,
     transport::stdio,
 };
 use schemars::JsonSchema;
@@ -18,19 +22,14 @@ use serde::Deserialize;
 use serde_with::{DisplayFromStr, PickFirst, json::JsonString, serde_as};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use uuid::Uuid;
 use turso::Connection;
-
+use uuid::Uuid;
 
 use crate::{
-    remote,
     config::{Config, RemoteMode},
     db::{self, Db},
     embed::Embedder,
-    index,
-    migrations,
-    project_id,
-    retrieve,
+    index, migrations, project_id, remote, retrieve,
     store::{self, WriteLock},
 };
 
@@ -58,7 +57,7 @@ enum DbState {
 }
 
 #[derive(Clone)]
-struct TytoServer {
+struct CoreeServer {
     db: tokio::sync::watch::Receiver<DbState>,
     idx: tokio::sync::watch::Receiver<index::IndexState>,
     write_lock: WriteLock,
@@ -71,18 +70,18 @@ struct TytoServer {
     prompt_router: PromptRouter<Self>,
 }
 
-impl TytoServer {
+impl CoreeServer {
     /// Returns the ready state or an actionable error string if still syncing or failed.
     /// Call at the top of every tool handler that needs the DB or embedder.
     fn try_ready(&self) -> Result<Arc<DbReady>, String> {
         match &*self.db.borrow() {
             DbState::Syncing => Err(
-                "tyto is syncing the memory database locally (initial replication). \
+                "coree is syncing the memory database locally (initial replication). \
                  Please wait a moment and retry."
                     .to_string(),
             ),
             DbState::Ready(r) => Ok(Arc::clone(r)),
-            DbState::Failed(msg) => Err(format!("tyto database initialisation failed: {msg}")),
+            DbState::Failed(msg) => Err(format!("coree database initialisation failed: {msg}")),
         }
     }
 
@@ -93,7 +92,7 @@ impl TytoServer {
             ),
             index::IndexState::Ready(r) => Ok(Arc::clone(r)),
             index::IndexState::Disabled => Err(
-                "Code indexing is disabled. Set [index] mode = \"managed\" in .tyto.toml to enable.".to_string()
+                "Code indexing is disabled. Set [index] mode = \"managed\" in .coree.toml to enable.".to_string()
             ),
             index::IndexState::Failed(msg) => Err(format!("Code index failed: {msg}")),
         }
@@ -242,7 +241,6 @@ struct PinMemoriesInput {
     pin: bool,
 }
 
-
 #[derive(Debug, Deserialize, JsonSchema)]
 struct CaptureNoteInput {
     /// Brief observation from exploration or tentative finding. Reviewed at next session start.
@@ -252,7 +250,9 @@ struct CaptureNoteInput {
     context: String,
 }
 
-fn default_capture_context() -> String { "note".to_string() }
+fn default_capture_context() -> String {
+    "note".to_string()
+}
 
 // --- Code intelligence tool input schemas ---
 
@@ -306,25 +306,25 @@ struct MigrateToTursoInput {
 // --- Prompt implementations ---
 
 #[prompt_router]
-impl TytoServer {
+impl CoreeServer {
     #[prompt(
         name = "remote_enable",
-        description = "Enable remote sync by migrating the local tyto database to a remote backend"
+        description = "Enable remote sync by migrating the local coree database to a remote backend"
     )]
     async fn remote_enable(
         &self,
         Parameters(input): Parameters<MigrateToTursoInput>,
     ) -> Vec<PromptMessage> {
         let cmd = match input.to_turso {
-            Some(ref url) => format!("tyto remote enable --url {url}"),
-            None => "tyto remote enable".to_string(),
+            Some(ref url) => format!("coree remote enable --url {url}"),
+            None => "coree remote enable".to_string(),
         };
         vec![PromptMessage::new_text(
             PromptMessageRole::User,
             format!(
-                "Please run `{cmd}` to enable remote sync for tyto. \
+                "Please run `{cmd}` to enable remote sync for coree. \
                  You will need --url <url> and --token <token> (get these from the Turso dashboard or `turso db show` / `turso db tokens create`). \
-                 Set TYTO__MEMORY__REMOTE_AUTH_TOKEN in your environment and restart Claude Code when done."
+                 Set COREE__MEMORY__REMOTE_AUTH_TOKEN in your environment and restart Claude Code when done."
             ),
         )]
     }
@@ -333,16 +333,23 @@ impl TytoServer {
 // --- Tool implementations ---
 
 #[tool_router]
-impl TytoServer {
-    #[tool(description = "Store or upsert one or more memories. Accepts an array - use for batch storage at session-start review or when storing related memories together. Use topic_key for upsert semantics.")]
-    async fn store_memories(&self, Parameters(input): Parameters<StoreMemoriesInput>) -> Result<String, String> {
+impl CoreeServer {
+    #[tool(
+        description = "Store or upsert one or more memories. Accepts an array - use for batch storage at session-start review or when storing related memories together. Use topic_key for upsert semantics."
+    )]
+    async fn store_memories(
+        &self,
+        Parameters(input): Parameters<StoreMemoriesInput>,
+    ) -> Result<String, String> {
         let ready = self.try_ready()?;
         if input.memories.is_empty() {
             return Ok("No memories provided.".to_string());
         }
 
         // Generate all embeddings with the lock held for the whole batch.
-        let embed_texts: Vec<String> = input.memories.iter()
+        let embed_texts: Vec<String> = input
+            .memories
+            .iter()
             .map(|m| format!("{} {}", m.title, m.content))
             .collect();
         let embeddings: Vec<_> = {
@@ -371,15 +378,24 @@ impl TytoServer {
                 pinned: memory.pinned,
             };
             match store::store_memory(&ready.conn, embedding, &self.write_lock, req, 30).await {
-                Ok(r) => results.push(if r.upserted { format!("Updated {}", r.id) } else { format!("Stored {}", r.id) }),
+                Ok(r) => results.push(if r.upserted {
+                    format!("Updated {}", r.id)
+                } else {
+                    format!("Stored {}", r.id)
+                }),
                 Err(e) => results.push(format!("Error: {e}")),
             }
         }
         Ok(results.join("\n"))
     }
 
-    #[tool(description = "Search memories using semantic + keyword search. Returns compact summaries with IDs. Pass detail=\"summary\" to also include facts and tags. Use get_memories(ids) to fetch full content.")]
-    async fn search_memory(&self, Parameters(input): Parameters<SearchMemoryInput>) -> Result<String, String> {
+    #[tool(
+        description = "Search memories using semantic + keyword search. Returns compact summaries with IDs. Pass detail=\"summary\" to also include facts and tags. Use get_memories(ids) to fetch full content."
+    )]
+    async fn search_memory(
+        &self,
+        Parameters(input): Parameters<SearchMemoryInput>,
+    ) -> Result<String, String> {
         let ready = self.try_ready()?;
         let project = input.project_id.unwrap_or_else(|| self.project_id.clone());
         let limit = input.limit.unwrap_or(5);
@@ -388,7 +404,8 @@ impl TytoServer {
         // Compute embedding with the embedder lock held, then release before DB work.
         let embedding = {
             let mut e = ready.embedder.lock().await;
-            e.embed(&input.query).map_err(|e| format!("embed failed: {e}"))?
+            e.embed(&input.query)
+                .map_err(|e| format!("embed failed: {e}"))?
         };
 
         retrieve::search(&ready.conn, embedding, &input.query, &project, limit)
@@ -405,8 +422,13 @@ impl TytoServer {
             .map_err(|e| format!("search_memory failed: {e}"))
     }
 
-    #[tool(description = "Fetch the full content of one or more memories by ID in a single call. Use when session-start context lists IDs you need in full.")]
-    async fn get_memories(&self, Parameters(input): Parameters<GetMemoriesInput>) -> Result<String, String> {
+    #[tool(
+        description = "Fetch the full content of one or more memories by ID in a single call. Use when session-start context lists IDs you need in full."
+    )]
+    async fn get_memories(
+        &self,
+        Parameters(input): Parameters<GetMemoriesInput>,
+    ) -> Result<String, String> {
         let ready = self.try_ready()?;
         if input.ids.is_empty() {
             return Ok("No IDs provided.".to_string());
@@ -419,18 +441,21 @@ impl TytoServer {
         let by_id: std::collections::HashMap<&str, &retrieve::FullMemory> =
             memories.iter().map(|m| (m.id.as_str(), m)).collect();
 
-        let parts: Vec<String> = input.ids.iter().map(|id| {
-            match by_id.get(id.as_str()) {
+        let parts: Vec<String> = input
+            .ids
+            .iter()
+            .map(|id| match by_id.get(id.as_str()) {
                 Some(m) => format_full_memory(m),
                 None => format!("Memory {id} not found"),
-            }
-        }).collect();
+            })
+            .collect();
 
         let mut out = parts.join("\n---\n");
 
         // Cross-type similar: per-vector ANN search, deduplicated by ID, best-effort, no model call.
         if !memories.is_empty()
-            && let Ok(embeddings) = retrieve::fetch_embeddings(&ready.conn, &input.ids, &self.project_id).await
+            && let Ok(embeddings) =
+                retrieve::fetch_embeddings(&ready.conn, &input.ids, &self.project_id).await
             && !embeddings.is_empty()
         {
             let exclude: std::collections::HashSet<String> = input.ids.iter().cloned().collect();
@@ -447,19 +472,27 @@ impl TytoServer {
             let idx = self.try_index_ready().ok();
 
             for (mem_id, embedding) in &embeddings {
-                let title = by_id.get(mem_id.as_str()).map(|m| m.title.as_str()).unwrap_or("");
-                let results = retrieve::search(
-                    &ready.conn, embedding.clone(), title, &self.project_id, 8
-                ).await.unwrap_or_default();
+                let title = by_id
+                    .get(mem_id.as_str())
+                    .map(|m| m.title.as_str())
+                    .unwrap_or("");
+                let results =
+                    retrieve::search(&ready.conn, embedding.clone(), title, &self.project_id, 8)
+                        .await
+                        .unwrap_or_default();
                 for r in results {
-                    if r.score >= MIN_SIMILAR_SCORE && !exclude.contains(&r.id) && mem_seen.insert(r.id.clone()) {
+                    if r.score >= MIN_SIMILAR_SCORE
+                        && !exclude.contains(&r.id)
+                        && mem_seen.insert(r.id.clone())
+                    {
                         mem_similar.push(r);
                     }
                 }
                 if let Some(ref idx) = idx {
-                    let code_results = index::search::search_code(
-                        &idx.conn, embedding.clone(), title, 5
-                    ).await.unwrap_or_default();
+                    let code_results =
+                        index::search::search_code(&idx.conn, embedding.clone(), title, 5)
+                            .await
+                            .unwrap_or_default();
                     for r in code_results {
                         if r.rrf_score >= MIN_SIMILAR_SCORE && code_seen.insert(r.id.clone()) {
                             code_similar.push(r);
@@ -470,10 +503,22 @@ impl TytoServer {
 
             let mut similar: Vec<(f64, String)> = Vec::new();
             for m in &mem_similar {
-                similar.push((m.score, format!("  [memory] {:.3}  {}  {}  ~{}c\n", m.score, m.id, m.title, m.content_len)));
+                similar.push((
+                    m.score,
+                    format!(
+                        "  [memory] {:.3}  {}  {}  ~{}c\n",
+                        m.score, m.id, m.title, m.content_len
+                    ),
+                ));
             }
             for c in &code_similar {
-                similar.push((c.rrf_score, format!("  [symbol] {:.3}  {}  {}:{}-{}\n", c.rrf_score, c.qualified_name, c.file_path, c.line_start, c.line_end)));
+                similar.push((
+                    c.rrf_score,
+                    format!(
+                        "  [symbol] {:.3}  {}  {}:{}-{}\n",
+                        c.rrf_score, c.qualified_name, c.file_path, c.line_start, c.line_end
+                    ),
+                ));
             }
             similar.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
             similar.truncate(8);
@@ -489,28 +534,45 @@ impl TytoServer {
         Ok(out)
     }
 
-    #[tool(description = "List memories with optional filters. Returns compact summaries. Pass detail=\"summary\" to also include facts and tags.")]
-    async fn list_memories(&self, Parameters(input): Parameters<ListMemoriesInput>) -> Result<String, String> {
+    #[tool(
+        description = "List memories with optional filters. Returns compact summaries. Pass detail=\"summary\" to also include facts and tags."
+    )]
+    async fn list_memories(
+        &self,
+        Parameters(input): Parameters<ListMemoriesInput>,
+    ) -> Result<String, String> {
         let ready = self.try_ready()?;
         let project = input.project_id.unwrap_or_else(|| self.project_id.clone());
         let limit = input.limit.unwrap_or(20);
         let summary = input.detail.as_deref() == Some("summary");
-        retrieve::list(&ready.conn, &project, input.memory_type.as_deref(), &input.tags, limit, 0.0)
-            .await
-            .map(|results| {
-                if results.is_empty() {
-                    "No memories found.".to_string()
-                } else if summary {
-                    crate::format::summary(&results)
-                } else {
-                    crate::format::compact(&results, 0, None)
-                }
-            })
-            .map_err(|e| format!("list_memories failed: {e}"))
+        retrieve::list(
+            &ready.conn,
+            &project,
+            input.memory_type.as_deref(),
+            &input.tags,
+            limit,
+            0.0,
+        )
+        .await
+        .map(|results| {
+            if results.is_empty() {
+                "No memories found.".to_string()
+            } else if summary {
+                crate::format::summary(&results)
+            } else {
+                crate::format::compact(&results, 0, None)
+            }
+        })
+        .map_err(|e| format!("list_memories failed: {e}"))
     }
 
-    #[tool(description = "Stage a lightweight note for review at next session start. Use during exploration for tentative observations not yet ready for a full memory.")]
-    async fn capture_note(&self, Parameters(input): Parameters<CaptureNoteInput>) -> Result<String, String> {
+    #[tool(
+        description = "Stage a lightweight note for review at next session start. Use during exploration for tentative observations not yet ready for a full memory."
+    )]
+    async fn capture_note(
+        &self,
+        Parameters(input): Parameters<CaptureNoteInput>,
+    ) -> Result<String, String> {
         let ready = self.try_ready()?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -525,8 +587,13 @@ impl TytoServer {
             .map_err(|e| format!("capture_note failed: {e}"))
     }
 
-    #[tool(description = "Pin or unpin one or more memories. Pinned memories are never evicted and always surface at session start. Use pin=true to pin, pin=false to unpin.")]
-    async fn pin_memories(&self, Parameters(input): Parameters<PinMemoriesInput>) -> Result<String, String> {
+    #[tool(
+        description = "Pin or unpin one or more memories. Pinned memories are never evicted and always surface at session start. Use pin=true to pin, pin=false to unpin."
+    )]
+    async fn pin_memories(
+        &self,
+        Parameters(input): Parameters<PinMemoriesInput>,
+    ) -> Result<String, String> {
         let ready = self.try_ready()?;
         if input.ids.is_empty() {
             return Ok("No IDs provided.".to_string());
@@ -537,20 +604,31 @@ impl TytoServer {
             Ok(n) if n as usize == total => Ok(format!("{action} {total} memories")),
             // turso execute() may return an unreliable count on file-based WAL DBs (upstream bug).
             // saturating_sub prevents a display underflow; the actual pin operation is correct.
-            Ok(n) => Ok(format!("{action} {n}/{total} memories ({} not found)", total.saturating_sub(n as usize))),
+            Ok(n) => Ok(format!(
+                "{action} {n}/{total} memories ({} not found)",
+                total.saturating_sub(n as usize)
+            )),
             Err(e) => Err(format!("pin_memories failed: {e}")),
         }
     }
 
-    #[tool(description = "Seed remote database from the local backup. Checks: replica mode is configured, backup file exists. Aborts if remote already has data unless force=true.")]
-    async fn remote_sync(&self, Parameters(input): Parameters<SeedCloudInput>) -> Result<String, String> {
+    #[tool(
+        description = "Seed remote database from the local backup. Checks: replica mode is configured, backup file exists. Aborts if remote already has data unless force=true."
+    )]
+    async fn remote_sync(
+        &self,
+        Parameters(input): Parameters<SeedCloudInput>,
+    ) -> Result<String, String> {
         remote::sync(&self.config, input.force.unwrap_or(false))
             .await
             .map_err(|e| format!("remote_sync failed: {e}"))
     }
 
     #[tool(description = "Delete one or more memories by ID.")]
-    async fn delete_memories(&self, Parameters(input): Parameters<DeleteMemoriesInput>) -> Result<String, String> {
+    async fn delete_memories(
+        &self,
+        Parameters(input): Parameters<DeleteMemoriesInput>,
+    ) -> Result<String, String> {
         let ready = self.try_ready()?;
         if input.ids.is_empty() {
             return Ok("No IDs provided.".to_string());
@@ -560,12 +638,17 @@ impl TytoServer {
             Ok(n) if n as usize == total => Ok(format!("Deleted {total} memories")),
             // turso execute() may return an unreliable count on file-based WAL DBs (upstream bug).
             // saturating_sub prevents a display underflow; the actual delete operation is correct.
-            Ok(n) => Ok(format!("Deleted {n}/{total} memories ({} not found)", total.saturating_sub(n as usize))),
+            Ok(n) => Ok(format!(
+                "Deleted {n}/{total} memories ({} not found)",
+                total.saturating_sub(n as usize)
+            )),
             Err(e) => Err(format!("delete_memories failed: {e}")),
         }
     }
 
-    #[tool(description = "List memories eligible for eviction: not pinned, older than 7 days, retention score below threshold. Call before evict_stale_memories to review candidates.")]
+    #[tool(
+        description = "List memories eligible for eviction: not pinned, older than 7 days, retention score below threshold. Call before evict_stale_memories to review candidates."
+    )]
     async fn list_stale_memories(&self) -> Result<String, String> {
         let ready = self.try_ready()?;
         match retrieve::list_stale(&ready.conn, &self.project_id).await {
@@ -584,10 +667,12 @@ impl TytoServer {
         }
     }
 
-    #[tool(description = "Load session memory context: pending review captures and top memories for this project. \
-        Call this at session start if tyto was still loading when the session began (embedding model download on first install). \
+    #[tool(
+        description = "Load session memory context: pending review captures and top memories for this project. \
+        Call this at session start if coree was still loading when the session began (embedding model download on first install). \
         Returns a 'loading' message if the database is not yet ready — wait a few seconds and retry. \
-        Marks pending captures as presented.")]
+        Marks pending captures as presented."
+    )]
     async fn session_context(&self) -> Result<String, String> {
         let ready = self.try_ready()?;
         crate::inject::build_tool_session_content(&ready.conn, &self.project_id)
@@ -595,7 +680,9 @@ impl TytoServer {
             .map_err(|e| format!("session_context failed: {e}"))
     }
 
-    #[tool(description = "Permanently delete all stale memories (not pinned, older than 7 days, retention score below threshold). Call list_stale_memories first to review candidates.")]
+    #[tool(
+        description = "Permanently delete all stale memories (not pinned, older than 7 days, retention score below threshold). Call list_stale_memories first to review candidates."
+    )]
     async fn evict_stale_memories(&self) -> Result<String, String> {
         let ready = self.try_ready()?;
         match retrieve::evict_stale(&ready.conn, &self.project_id).await {
@@ -607,8 +694,13 @@ impl TytoServer {
 
     // --- Code intelligence tools ---
 
-    #[tool(description = "Search source code and git history only, without memory results. Use when specifically looking for code references or callers and memory results would add noise.")]
-    async fn search_code(&self, Parameters(input): Parameters<SearchCodeInput>) -> Result<String, String> {
+    #[tool(
+        description = "Search source code and git history only, without memory results. Use when specifically looking for code references or callers and memory results would add noise."
+    )]
+    async fn search_code(
+        &self,
+        Parameters(input): Parameters<SearchCodeInput>,
+    ) -> Result<String, String> {
         let db_ready = self.try_ready()?;
         let idx = self.try_index_ready()?;
         let limit = input.limit.unwrap_or(10);
@@ -616,8 +708,12 @@ impl TytoServer {
         let embedding = {
             let t_lock = std::time::Instant::now();
             let mut e = db_ready.embedder.lock().await;
-            tracing::debug!(elapsed_ms = t_lock.elapsed().as_millis(), "search_code embedder lock wait");
-            e.embed(&input.query).map_err(|e| format!("embed failed: {e}"))?
+            tracing::debug!(
+                elapsed_ms = t_lock.elapsed().as_millis(),
+                "search_code embedder lock wait"
+            );
+            e.embed(&input.query)
+                .map_err(|e| format!("embed failed: {e}"))?
         };
 
         let results = index::search::search_code(&idx.conn, embedding, &input.query, limit)
@@ -641,16 +737,17 @@ impl TytoServer {
         Ok(out)
     }
 
-    #[tool(description = "Look up a specific symbol by name. Returns signature, doc, git history for that line range, and cross-type similar results. Supply file_path to narrow when the name is ambiguous.")]
-    async fn get_symbol(&self, Parameters(input): Parameters<GetSymbolInput>) -> Result<String, String> {
+    #[tool(
+        description = "Look up a specific symbol by name. Returns signature, doc, git history for that line range, and cross-type similar results. Supply file_path to narrow when the name is ambiguous."
+    )]
+    async fn get_symbol(
+        &self,
+        Parameters(input): Parameters<GetSymbolInput>,
+    ) -> Result<String, String> {
         let idx = self.try_index_ready()?;
-        let results = index::search::get_symbol(
-            &idx.conn,
-            &input.name,
-            input.file_path.as_deref(),
-        )
-        .await
-        .map_err(|e| format!("get_symbol failed: {e}"))?;
+        let results = index::search::get_symbol(&idx.conn, &input.name, input.file_path.as_deref())
+            .await
+            .map_err(|e| format!("get_symbol failed: {e}"))?;
 
         if results.is_empty() {
             return Ok(format!("Symbol '{}' not found in the index.", input.name));
@@ -670,7 +767,9 @@ impl TytoServer {
                     let ls = r.line_start as usize;
                     let le = r.line_end as usize;
                     move || index::git::symbol_commits(&root, &fp, ls, le, 8)
-                }).await.unwrap_or_default();
+                })
+                .await
+                .unwrap_or_default();
 
                 if !commits.is_empty() {
                     out.push_str(&format!("Recent: {}\n", commits.join("; ")));
@@ -695,28 +794,47 @@ impl TytoServer {
                 e.embed(&embed_text)
             } {
                 let mem_similar: Vec<_> = retrieve::search(
-                    &db_ready.conn, embedding.clone(), &embed_text, &self.project_id, 5
-                ).await.unwrap_or_default()
-                    .into_iter()
-                    .filter(|r| r.score >= MIN_SIMILAR_SCORE)
-                    .collect();
+                    &db_ready.conn,
+                    embedding.clone(),
+                    &embed_text,
+                    &self.project_id,
+                    5,
+                )
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| r.score >= MIN_SIMILAR_SCORE)
+                .collect();
 
                 let exclude: std::collections::HashSet<String> =
                     results.iter().map(|r| r.id.clone()).collect();
-                let code_similar: Vec<_> = index::search::search_code(
-                    &idx.conn, embedding, &embed_text, 10
-                ).await.unwrap_or_default()
-                    .into_iter()
-                    .filter(|r| !exclude.contains(&r.id) && r.rrf_score >= MIN_SIMILAR_SCORE)
-                    .take(5)
-                    .collect();
+                let code_similar: Vec<_> =
+                    index::search::search_code(&idx.conn, embedding, &embed_text, 10)
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|r| !exclude.contains(&r.id) && r.rrf_score >= MIN_SIMILAR_SCORE)
+                        .take(5)
+                        .collect();
 
                 let mut similar: Vec<(f64, String)> = Vec::new();
                 for m in &mem_similar {
-                    similar.push((m.score, format!("  [memory] {:.3}  {}  {}  ~{}c\n", m.score, m.id, m.title, m.content_len)));
+                    similar.push((
+                        m.score,
+                        format!(
+                            "  [memory] {:.3}  {}  {}  ~{}c\n",
+                            m.score, m.id, m.title, m.content_len
+                        ),
+                    ));
                 }
                 for c in &code_similar {
-                    similar.push((c.rrf_score, format!("  [symbol] {:.3}  {}  {}:{}-{}\n", c.rrf_score, c.qualified_name, c.file_path, c.line_start, c.line_end)));
+                    similar.push((
+                        c.rrf_score,
+                        format!(
+                            "  [symbol] {:.3}  {}  {}:{}-{}\n",
+                            c.rrf_score, c.qualified_name, c.file_path, c.line_start, c.line_end
+                        ),
+                    ));
                 }
                 similar.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
                 similar.truncate(8);
@@ -734,7 +852,9 @@ impl TytoServer {
         Ok(out)
     }
 
-    #[tool(description = "Search memories, source code, and git history simultaneously. Use this by default. Returns memory results and code results in separate sections.")]
+    #[tool(
+        description = "Search memories, source code, and git history simultaneously. Use this by default. Returns memory results and code results in separate sections."
+    )]
     async fn search(&self, Parameters(input): Parameters<SearchInput>) -> Result<String, String> {
         let t_search = std::time::Instant::now();
         let db_ready = self.try_ready()?;
@@ -743,8 +863,12 @@ impl TytoServer {
         let embedding = {
             let t_lock = std::time::Instant::now();
             let mut e = db_ready.embedder.lock().await;
-            tracing::debug!(elapsed_ms = t_lock.elapsed().as_millis(), "embedder lock wait");
-            e.embed(&input.query).map_err(|e| format!("embed failed: {e}"))?
+            tracing::debug!(
+                elapsed_ms = t_lock.elapsed().as_millis(),
+                "embedder lock wait"
+            );
+            e.embed(&input.query)
+                .map_err(|e| format!("embed failed: {e}"))?
         };
 
         // Memory search
@@ -758,7 +882,11 @@ impl TytoServer {
         )
         .await
         .unwrap_or_default();
-        tracing::debug!(elapsed_ms = t_mem.elapsed().as_millis(), results = memory_results.len(), "memory search");
+        tracing::debug!(
+            elapsed_ms = t_mem.elapsed().as_millis(),
+            results = memory_results.len(),
+            "memory search"
+        );
 
         // Code search (best-effort: don't fail the whole search if index not ready)
         let t_code = std::time::Instant::now();
@@ -769,7 +897,11 @@ impl TytoServer {
                 let r = index::search::search_code(&idx.conn, embedding, &input.query, limit)
                     .await
                     .unwrap_or_default();
-                tracing::debug!(elapsed_ms = t_code.elapsed().as_millis(), results = r.len(), "code search");
+                tracing::debug!(
+                    elapsed_ms = t_code.elapsed().as_millis(),
+                    results = r.len(),
+                    "code search"
+                );
                 r
             }
             Err(_) => {
@@ -807,7 +939,10 @@ impl TytoServer {
         items.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
         if items.is_empty() || items[0].0 < MIN_TOP_SCORE {
-            tracing::debug!(elapsed_ms = t_search.elapsed().as_millis(), "search handler (no results above threshold)");
+            tracing::debug!(
+                elapsed_ms = t_search.elapsed().as_millis(),
+                "search handler (no results above threshold)"
+            );
             return Ok("No results found.".to_string());
         }
         items.retain(|(score, _)| *score >= MIN_SCORE);
@@ -821,23 +956,27 @@ impl TytoServer {
         let truncated = memory_results.len() >= limit || code_results.len() >= limit;
         let index_field = match index_state_hint {
             Some("initializing") => ", code_index: \"initializing — retry for code results\"",
-            Some("failed") => ", code_index: \"failed — check tyto-serve.log\"",
+            Some("failed") => ", code_index: \"failed — check coree-serve.log\"",
             _ => "",
         };
         out.push_str(&format!(
             "_meta: {{returned: {total}, total_before_cutoff: {all_count}, truncated: {truncated}{index_field}}}\n"
         ));
-        tracing::debug!(elapsed_ms = t_search.elapsed().as_millis(), total, "search handler total");
+        tracing::debug!(
+            elapsed_ms = t_search.elapsed().as_millis(),
+            total,
+            "search handler total"
+        );
         Ok(out)
     }
 }
 
 #[tool_handler]
 #[prompt_handler]
-impl ServerHandler for TytoServer {
+impl ServerHandler for CoreeServer {
     fn get_info(&self) -> InitializeResult {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
-            .with_server_info(Implementation::new("tyto", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new("coree", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Persistent memory and code intelligence across sessions. \
                  Store every decision, discovery, gotcha, failure, and unexpected outcome - \
@@ -886,7 +1025,10 @@ async fn reembed_stale(conn: Arc<Connection>, embedder: Arc<Mutex<Embedder>>) {
                 .await
             {
                 Ok(r) => r,
-                Err(e) => { eprintln!("tyto: reembed scan failed: {e}"); return; }
+                Err(e) => {
+                    eprintln!("coree: reembed scan failed: {e}");
+                    return;
+                }
             };
             let mut out = Vec::new();
             while let Ok(Some(row)) = rows.next().await {
@@ -899,7 +1041,7 @@ async fn reembed_stale(conn: Arc<Connection>, embedder: Arc<Mutex<Embedder>>) {
 
         if batch.is_empty() {
             if total > 0 {
-                eprintln!("tyto: re-embedded {total} memories to model {model}");
+                eprintln!("coree: re-embedded {total} memories to model {model}");
             }
             return;
         }
@@ -909,7 +1051,10 @@ async fn reembed_stale(conn: Arc<Connection>, embedder: Arc<Mutex<Embedder>>) {
                 let mut e = embedder.lock().await;
                 match e.embed(&text) {
                     Ok(v) => v,
-                    Err(e) => { eprintln!("tyto: reembed failed for {id}: {e}"); continue; }
+                    Err(e) => {
+                        eprintln!("coree: reembed failed for {id}: {e}");
+                        continue;
+                    }
                 }
             };
             let blob = crate::embed::floats_to_blob(&embedding);
@@ -941,16 +1086,21 @@ pub async fn run(config: Config) -> Result<()> {
     }
 
     // Init file logger first — all subsequent mlog! calls mirror to this file.
-    let log_path = config.db_path()
+    let log_path = config
+        .db_path()
         .parent()
-        .map(|p| p.join("tyto-serve.log"))
-        .unwrap_or_else(|| std::path::PathBuf::from("tyto-serve.log"));
+        .map(|p| p.join("coree-serve.log"))
+        .unwrap_or_else(|| std::path::PathBuf::from("coree-serve.log"));
     crate::log::init(&log_path);
     crate::log::init_tracing_to_file();
 
-    mlog!("=== tyto serve starting ===");
+    mlog!("=== coree serve starting ===");
     mlog!("version: {}", env!("CARGO_PKG_VERSION"));
-    mlog!("platform: {}/{}", std::env::consts::OS, std::env::consts::ARCH);
+    mlog!(
+        "platform: {}/{}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
     mlog!("log file: {}", log_path.display());
     if let Ok(cwd) = std::env::current_dir() {
         mlog!("cwd: {}", cwd.display());
@@ -961,8 +1111,9 @@ pub async fn run(config: Config) -> Result<()> {
     let pid = project_id::resolve(&config.project_root, config.project_id.as_deref());
 
     // Set up crash log and panic hook before any fallible work.
-    // crash.log is read by `tyto inject` on next session start and surfaced to the AI.
-    let crash_log = config.db_path()
+    // crash.log is read by `coree inject` on next session start and surfaced to the AI.
+    let crash_log = config
+        .db_path()
         .parent()
         .map(|p| p.join("crash.log"))
         .unwrap_or_else(|| std::path::PathBuf::from("crash.log"));
@@ -973,7 +1124,10 @@ pub async fn run(config: Config) -> Result<()> {
     let crash_log_hook = crash_log.clone();
     std::panic::set_hook(Box::new(move |info| {
         mlog!("PANIC: {info}");
-        let msg = format!("[{}] PANIC: {info}\n", chrono::Utc::now().format("%H:%M:%S"));
+        let msg = format!(
+            "[{}] PANIC: {info}\n",
+            chrono::Utc::now().format("%H:%M:%S")
+        );
         let _ = std::fs::write(&crash_log_hook, &msg);
     }));
 
@@ -985,29 +1139,30 @@ pub async fn run(config: Config) -> Result<()> {
         // crash.log and we don't want to erase it.
         use std::io::Write as _;
         let _ = std::fs::OpenOptions::new()
-            .create(true).append(true)
+            .create(true)
+            .append(true)
             .open(&crash_log)
             .and_then(|mut f| writeln!(f, "{}", msg.trim()));
     }
-    mlog!("=== tyto serve exiting ===");
+    mlog!("=== coree serve exiting ===");
     result
 }
 
-/// Start the MCP server in inert mode when no `.tyto.toml` with a `project_id`
+/// Start the MCP server in inert mode when no `.coree.toml` with a `project_id`
 /// is found. The server is fully reachable so the AI can call tools, but every
 /// tool call returns a "no config" message with setup instructions.
 async fn serve_no_config(config: Config) -> Result<()> {
     let suggested = project_id::infer(&config.project_root);
     let no_config_msg = format!(
-        "tyto has loaded, but there is no `.tyto.toml` configuration file for this \
+        "coree has loaded, but there is no `.coree.toml` configuration file for this \
          project, so memories will not be stored or retrieved this session.\n\
-         If you would like to enable memories, please ask me to create a `.tyto.toml` \
+         If you would like to enable memories, please ask me to create a `.coree.toml` \
          file. Suggested configuration based on this project:\n\n\
          ```toml\n\
          project_id = \"{suggested}\"\n\
          ```"
     );
-    eprintln!("tyto: running in inert mode (no .tyto.toml with project_id found)");
+    eprintln!("coree: running in inert mode (no .coree.toml with project_id found)");
 
     // Put the server immediately into a permanent Failed state. Every tool call
     // will return the no-config message via try_ready(). The watch sender is kept
@@ -1015,15 +1170,15 @@ async fn serve_no_config(config: Config) -> Result<()> {
     let (_db_tx, db_rx) = tokio::sync::watch::channel(DbState::Failed(no_config_msg));
     let (_idx_tx, idx_rx) = tokio::sync::watch::channel(index::IndexState::Disabled);
 
-    let server = TytoServer {
+    let server = CoreeServer {
         db: db_rx,
         idx: idx_rx,
         write_lock: store::new_write_lock(),
         session_id: Uuid::new_v4().to_string(),
         project_id: suggested,
         config: Arc::new(config),
-        tool_router: TytoServer::tool_router(),
-        prompt_router: TytoServer::prompt_router(),
+        tool_router: CoreeServer::tool_router(),
+        prompt_router: CoreeServer::prompt_router(),
     };
 
     let service = server.serve(stdio()).await?;
@@ -1050,31 +1205,33 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     if let Some(parent) = lock_file_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    
+
     let lock_file = std::fs::OpenOptions::new()
-        .write(true).create(true).truncate(false)
+        .write(true)
+        .create(true)
+        .truncate(false)
         .open(&lock_file_path)
         .map_err(|e| anyhow::anyhow!("Failed to open serve.lock: {e}"))?;
 
     let session_id = Uuid::new_v4().to_string();
-    mlog!("tyto: session {session_id}, project \"{project_id}\"");
+    mlog!("coree: session {session_id}, project \"{project_id}\"");
 
-    let server = TytoServer {
+    let server = CoreeServer {
         db: db_rx,
         idx: idx_rx,
         write_lock: store::new_write_lock(),
         session_id,
         project_id: project_id.clone(),
         config: Arc::new(config.clone()),
-        tool_router: TytoServer::tool_router(),
-        prompt_router: TytoServer::prompt_router(),
+        tool_router: CoreeServer::tool_router(),
+        prompt_router: CoreeServer::prompt_router(),
     };
 
     // Spawn background leader election and initialization task.
     // This task polls the lock every second until it becomes the primary.
     //
     // GOTCHA: Synced replicas do not support multi-process concurrency in this version.
-    // We use a continuous polling leader-election strategy to ensure exactly one process 
+    // We use a continuous polling leader-election strategy to ensure exactly one process
     // manages the database, while allowing secondary processes to start and proxy tool calls.
     let config_for_bg = config.clone();
     let db_tx_clone = db_tx.clone();
@@ -1083,11 +1240,11 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     let ready_file_bg = ready_file.clone();
     let is_primary = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let is_primary_bg = Arc::clone(&is_primary);
-    
+
     tokio::spawn(async move {
         loop {
             if lock_file.try_lock().is_ok() {
-                mlog!("tyto: acquired serve.lock (primary)");
+                mlog!("coree: acquired serve.lock (primary)");
                 is_primary_bg.store(true, std::sync::atomic::Ordering::SeqCst);
                 break;
             }
@@ -1095,49 +1252,74 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
 
-        // Start local IPC socket so `tyto request` can reach the warm embedder/DB.
+        // Start local IPC socket so `coree request` can reach the warm embedder/DB.
         spawn_socket_listener(server_for_socket.clone(), &config_for_bg);
 
-        match init_db_and_embedder(&config_for_bg, Arc::clone(&server_for_socket.write_lock)).await {
+        match init_db_and_embedder(&config_for_bg, Arc::clone(&server_for_socket.write_lock)).await
+        {
             Ok(ready) => {
                 let embedder_for_idx = Arc::clone(&ready.embedder);
                 let _ = db_tx_clone.send(DbState::Ready(Arc::new(ready)));
                 let _ = std::fs::write(&ready_file_bg, "");
-                mlog!("tyto: database ready");
+                mlog!("coree: database ready");
 
                 // The primary instance manages the code indexer.
                 use crate::config::StorageMode;
-                let index_enabled = !matches!(config_for_bg.index.storage.mode, StorageMode::Disabled);
+                let index_enabled =
+                    !matches!(config_for_bg.index.storage.mode, StorageMode::Disabled);
                 if index_enabled {
                     let db_path = config_for_bg.index_db_path();
                     let project_root = config_for_bg.project_root.clone();
                     let git_history = config_for_bg.index.git_history;
                     let extra_excludes = config_for_bg.index.exclude.clone();
                     tokio::spawn(async move {
-                        mlog!("tyto: opening code index at {}", db_path.display());
-                        match index::open(&db_path, project_root.clone(), git_history, Arc::clone(&embedder_for_idx)).await {
+                        mlog!("coree: opening code index at {}", db_path.display());
+                        match index::open(
+                            &db_path,
+                            project_root.clone(),
+                            git_history,
+                            Arc::clone(&embedder_for_idx),
+                        )
+                        .await
+                        {
                             Ok(idx_ready) => {
                                 let idx_ready = Arc::new(idx_ready);
-                                let _ = idx_tx_clone.send(index::IndexState::Ready(Arc::clone(&idx_ready)));
-                                mlog!("tyto: code index ready, starting background indexing...");
+                                let _ = idx_tx_clone
+                                    .send(index::IndexState::Ready(Arc::clone(&idx_ready)));
+                                mlog!("coree: code index ready, starting background indexing...");
                                 // Indexer and watcher get dedicated connections — must NOT share
                                 // idx_ready.conn (the search connection) due to turso's per-Connection
                                 // ConcurrentGuard which allows only one concurrent operation per instance.
                                 let indexer_conn = match idx_ready.new_conn() {
                                     Ok(c) => c,
-                                    Err(e) => { mlog!("tyto: failed to create indexer connection: {e:#}"); return; }
+                                    Err(e) => {
+                                        mlog!("coree: failed to create indexer connection: {e:#}");
+                                        return;
+                                    }
                                 };
                                 let emb = Arc::clone(&embedder_for_idx);
-                                match index::indexer::run(project_root.clone(), indexer_conn, emb.clone(), git_history, extra_excludes.clone()).await {
+                                match index::indexer::run(
+                                    project_root.clone(),
+                                    indexer_conn,
+                                    emb.clone(),
+                                    git_history,
+                                    extra_excludes.clone(),
+                                )
+                                .await
+                                {
                                     Ok(r) => mlog!(
-                                        "tyto: code index complete — {} files, {} chunks",
-                                        r.files_indexed, r.chunks_stored
+                                        "coree: code index complete — {} files, {} chunks",
+                                        r.files_indexed,
+                                        r.chunks_stored
                                     ),
-                                    Err(e) => mlog!("tyto: code index run failed: {e:#}"),
+                                    Err(e) => mlog!("coree: code index run failed: {e:#}"),
                                 }
                                 let watcher_conn = match idx_ready.new_conn() {
                                     Ok(c) => c,
-                                    Err(e) => { mlog!("tyto: failed to create watcher connection: {e:#}"); return; }
+                                    Err(e) => {
+                                        mlog!("coree: failed to create watcher connection: {e:#}");
+                                        return;
+                                    }
                                 };
                                 let watcher_lock = config_for_bg.index_watcher_lock_path();
                                 index::watcher::start(
@@ -1150,18 +1332,19 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
                                 );
                             }
                             Err(e) => {
-                                mlog!("tyto: code index open failed: {e:#}");
-                                let _ = idx_tx_clone.send(index::IndexState::Failed(format!("{e:#}")));
+                                mlog!("coree: code index open failed: {e:#}");
+                                let _ =
+                                    idx_tx_clone.send(index::IndexState::Failed(format!("{e:#}")));
                             }
                         }
                     });
                 } else {
                     let _ = idx_tx_clone.send(index::IndexState::Disabled);
-                    mlog!("tyto: code indexing disabled in config");
+                    mlog!("coree: code indexing disabled in config");
                 }
             }
             Err(e) => {
-                mlog!("tyto: database init failed: {e:#}");
+                mlog!("coree: database init failed: {e:#}");
                 let _ = db_tx_clone.send(DbState::Failed(format!("{e:#}")));
                 let _ = idx_tx_clone.send(index::IndexState::Disabled);
             }
@@ -1177,14 +1360,14 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     // Start MCP transport immediately — Claude Code sees us as connected right away.
     // Tool calls during the sync window return a "syncing" message instead of blocking.
     let service = server.serve(stdio()).await?;
-    mlog!("tyto: ready (waiting for database lock)");
+    mlog!("coree: ready (waiting for database lock)");
 
     // Wait for client disconnect, shutdown signal, or a permanent DB init failure.
     // DB init failure is re-raised as an error so run() writes it to crash.log.
     let serve_result: Result<()> = tokio::select! {
         result = service.waiting() => result.map(|_| ()).map_err(Into::into),
         _ = shutdown_signal() => {
-            mlog!("tyto: shutting down");
+            mlog!("coree: shutting down");
             Ok(())
         }
         _ = wait_db_failed(&mut db_rx_monitor) => {
@@ -1210,10 +1393,10 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     serve_result
 }
 
-/// Bind a local IPC listener and accept MCP connections from `tyto request`.
-/// Each accepted connection gets its own cloned TytoServer and a full MCP session.
+/// Bind a local IPC listener and accept MCP connections from `coree request`.
+/// Each accepted connection gets its own cloned CoreeServer and a full MCP session.
 /// Errors are logged and the listener exits; serve continues unaffected.
-fn spawn_socket_listener(server: TytoServer, config: &Config) {
+fn spawn_socket_listener(server: CoreeServer, config: &Config) {
     #[cfg(unix)]
     {
         use tokio::net::UnixListener;
@@ -1229,20 +1412,22 @@ fn spawn_socket_listener(server: TytoServer, config: &Config) {
                                 let srv = server.clone();
                                 tokio::spawn(async move {
                                     match srv.serve(stream).await {
-                                        Ok(service) => { let _ = service.waiting().await; }
-                                        Err(e) => mlog!("tyto: socket client error: {e}"),
+                                        Ok(service) => {
+                                            let _ = service.waiting().await;
+                                        }
+                                        Err(e) => mlog!("coree: socket client error: {e}"),
                                     }
                                 });
                             }
                             Err(e) => {
-                                mlog!("tyto: socket accept error: {e}");
+                                mlog!("coree: socket accept error: {e}");
                                 break;
                             }
                         }
                     }
                 });
             }
-            Err(e) => mlog!("tyto: failed to bind Unix socket: {e}"),
+            Err(e) => mlog!("coree: failed to bind Unix socket: {e}"),
         }
     }
 
@@ -1252,9 +1437,15 @@ fn spawn_socket_listener(server: TytoServer, config: &Config) {
         let pipe_name = config.serve_pipe_name();
         tokio::spawn(async move {
             loop {
-                let pipe = match ServerOptions::new().first_pipe_instance(false).create(&pipe_name) {
+                let pipe = match ServerOptions::new()
+                    .first_pipe_instance(false)
+                    .create(&pipe_name)
+                {
                     Ok(p) => p,
-                    Err(e) => { mlog!("tyto: named pipe create error: {e}"); break; }
+                    Err(e) => {
+                        mlog!("coree: named pipe create error: {e}");
+                        break;
+                    }
                 };
                 if pipe.connect().await.is_err() {
                     continue;
@@ -1262,8 +1453,10 @@ fn spawn_socket_listener(server: TytoServer, config: &Config) {
                 let srv = server.clone();
                 tokio::spawn(async move {
                     match srv.serve(pipe).await {
-                        Ok(service) => { let _ = service.waiting().await; }
-                        Err(e) => mlog!("tyto: pipe client error: {e}"),
+                        Ok(service) => {
+                            let _ = service.waiting().await;
+                        }
+                        Err(e) => mlog!("coree: pipe client error: {e}"),
                     }
                 });
             }
@@ -1301,7 +1494,7 @@ async fn wait_db_failed(rx: &mut tokio::sync::watch::Receiver<DbState>) {
 
 async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<DbReady> {
     let t_init = std::time::Instant::now();
-    mlog!("tyto: opening database...");
+    mlog!("coree: opening database...");
     let db = Db::open(config).await?;
     let conn = Arc::new(db.conn);
     let handle = db.handle;
@@ -1313,17 +1506,17 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
     // the sync. Checkpointing merges the WAL into the main db file so the
     // post-sync snapshot is the authoritative starting state.
     //
-    // GOTCHA: We use sync_db.checkpoint() instead of 'PRAGMA wal_checkpoint' because 
+    // GOTCHA: We use sync_db.checkpoint() instead of 'PRAGMA wal_checkpoint' because
     // Turso's .execute() fails on pragmas that return rows.
     if let db::AnyDb::Synced(ref sync_db) = handle {
         let t_cp = std::time::Instant::now();
         match sync_db.checkpoint().await {
             Ok(_) => tracing::debug!(elapsed_ms = t_cp.elapsed().as_millis(), "WAL checkpoint"),
-            Err(e) => mlog!("tyto: WAL checkpoint failed (non-fatal): {e:#}"),
+            Err(e) => mlog!("coree: WAL checkpoint failed (non-fatal): {e:#}"),
         }
     }
 
-    mlog!("tyto: running migrations...");
+    mlog!("coree: running migrations...");
     let t_mig = std::time::Instant::now();
     let mig_result = migrations::run(&conn).await;
     tracing::debug!(elapsed_ms = t_mig.elapsed().as_millis(), "migrations");
@@ -1332,17 +1525,16 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
     // db file after sync, causing "no such table" for tables that exist in Turso.
     // Purge and re-open once to force a clean full re-sync.
     let (conn, handle, temp_dir) = if let Err(ref e) = mig_result {
-        let is_replica = matches!(
-            config.memory.storage.remote_mode,
-            RemoteMode::Replica
-        );
+        let is_replica = matches!(config.memory.storage.remote_mode, RemoteMode::Replica);
         if is_replica {
-            mlog!("tyto: CRITICAL: migration failed in replica mode ({e:#}). PURGING local replica to force clean resync...");
+            mlog!(
+                "coree: CRITICAL: migration failed in replica mode ({e:#}). PURGING local replica to force clean resync..."
+            );
             drop(conn);
             db::purge_replica_files(&config.db_path())?;
             let db = Db::open(config).await?;
             let conn = Arc::new(db.conn);
-            mlog!("tyto: running migrations (retry)...");
+            mlog!("coree: running migrations (retry)...");
             migrations::run(&conn).await?;
             (conn, db.handle, db.temp_dir)
         } else {
@@ -1352,11 +1544,14 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
         (conn, handle, temp_dir)
     };
 
-    mlog!("tyto: loading embedding model (first run will download ~22MB)...");
+    mlog!("coree: loading embedding model (first run will download ~22MB)...");
     let t_model = std::time::Instant::now();
     let embedder = Arc::new(Mutex::new(Embedder::load()?));
     tracing::debug!(elapsed_ms = t_model.elapsed().as_millis(), "embedder load");
-    tracing::debug!(elapsed_ms = t_init.elapsed().as_millis(), "init_db_and_embedder total");
+    tracing::debug!(
+        elapsed_ms = t_init.elapsed().as_millis(),
+        "init_db_and_embedder total"
+    );
 
     // Start manual background sync for replicas.
     if let db::AnyDb::Synced(ref sync_db) = handle {
@@ -1368,9 +1563,9 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
                 interval.tick().await;
                 // Periodic push/pull/checkpoint to stay in sync and keep WAL small.
                 //
-                // GOTCHA: We must use the write_lock to ensure sync doesn't overlap with local 
-                // mutations. Even with a single process, Limbo's sync engine can panic 
-                // (e.g., "parent should have a rightmost pointer") if remote frames are applied 
+                // GOTCHA: We must use the write_lock to ensure sync doesn't overlap with local
+                // mutations. Even with a single process, Limbo's sync engine can panic
+                // (e.g., "parent should have a rightmost pointer") if remote frames are applied
                 // while the B-Tree is being modified locally.
                 let _guard = write_lock_clone.lock().await;
                 if let Err(e) = sync_db.push().await {
@@ -1391,7 +1586,13 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
     // gracefully while this is in progress.
     tokio::spawn(reembed_stale(Arc::clone(&conn), Arc::clone(&embedder)));
 
-    Ok(DbReady { conn, embedder, write_lock, handle, temp_dir })
+    Ok(DbReady {
+        conn,
+        embedder,
+        write_lock,
+        handle,
+        temp_dir,
+    })
 }
 
 async fn shutdown_signal() {
@@ -1413,16 +1614,30 @@ async fn shutdown_signal() {
 }
 
 fn format_full_memory(m: &retrieve::FullMemory) -> String {
-    let facts: Vec<String> = m.facts.as_deref()
-        .and_then(|f| serde_json::from_str(f).ok()).unwrap_or_default();
-    let tags: Vec<String> = m.tags.as_deref()
-        .and_then(|t| serde_json::from_str(t).ok()).unwrap_or_default();
-    let facts_str = if facts.is_empty() { "none".to_string() }
-        else { format!("- {}", facts.join("\n- ")) };
+    let facts: Vec<String> = m
+        .facts
+        .as_deref()
+        .and_then(|f| serde_json::from_str(f).ok())
+        .unwrap_or_default();
+    let tags: Vec<String> = m
+        .tags
+        .as_deref()
+        .and_then(|t| serde_json::from_str(t).ok())
+        .unwrap_or_default();
+    let facts_str = if facts.is_empty() {
+        "none".to_string()
+    } else {
+        format!("- {}", facts.join("\n- "))
+    };
     format!(
         "[{memory_type}] {title}\nID: {id}\nCreated: {created}\nImportance: {imp:.1}\nTags: {tags}\n\nContent:\n{content}\n\nFacts:\n{facts}",
-        memory_type = m.memory_type, title = m.title, id = m.id,
-        created = m.created_at, imp = m.importance,
-        tags = tags.join(", "), content = m.content, facts = facts_str,
+        memory_type = m.memory_type,
+        title = m.title,
+        id = m.id,
+        created = m.created_at,
+        imp = m.importance,
+        tags = tags.join(", "),
+        content = m.content,
+        facts = facts_str,
     )
 }

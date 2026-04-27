@@ -1,6 +1,10 @@
 use anyhow::Result;
 
-use crate::{config::{Config, StorageMode}, db::Db, migrations, project_id};
+use crate::{
+    config::{Config, StorageMode},
+    db::Db,
+    migrations, project_id,
+};
 
 pub async fn run(config: &Config) -> Result<()> {
     let pid = project_id::resolve(&config.project_root, config.project_id.as_deref());
@@ -14,10 +18,7 @@ pub async fn run(config: &Config) -> Result<()> {
     let mode = match s.mode {
         StorageMode::Managed => "managed".to_string(),
         StorageMode::Local => "local".to_string(),
-        StorageMode::Remote => format!(
-            "remote/{}",
-            format!("{:?}", s.remote_mode).to_lowercase()
-        ),
+        StorageMode::Remote => format!("remote/{}", format!("{:?}", s.remote_mode).to_lowercase()),
         StorageMode::Disabled => "disabled".to_string(),
     };
 
@@ -50,7 +51,7 @@ pub async fn run(config: &Config) -> Result<()> {
         .await?
         .and_then(|r| r.get::<String>(0).ok());
 
-    println!("tyto v{}", env!("CARGO_PKG_VERSION"));
+    println!("coree v{}", env!("CARGO_PKG_VERSION"));
     println!();
     println!("project:      {pid}");
     println!("backend:      {mode}");
@@ -71,7 +72,7 @@ pub async fn run(config: &Config) -> Result<()> {
         }
     } else {
         println!();
-        println!("tip: run 'tyto install' to configure Claude Code integration");
+        println!("tip: run 'coree install' to configure Claude Code integration");
     }
 
     Ok(())

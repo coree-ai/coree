@@ -30,7 +30,10 @@ impl IndexReady {
     /// Callers that write (indexer, watcher) must call this instead of cloning
     /// `conn`, so they never contend with search query handlers.
     pub fn new_conn(&self) -> Result<Arc<turso::Connection>> {
-        let conn = self.db.connect().context("Failed to create index connection")?;
+        let conn = self
+            .db
+            .connect()
+            .context("Failed to create index connection")?;
         Ok(Arc::new(conn))
     }
 }
@@ -65,7 +68,10 @@ pub async fn open(
         std::fs::create_dir_all(parent)?;
     }
 
-    let db_path_str = db_path.to_str().context("Index DB path is not valid UTF-8")?.to_string();
+    let db_path_str = db_path
+        .to_str()
+        .context("Index DB path is not valid UTF-8")?
+        .to_string();
 
     let db = {
         let mut last_err = None;
@@ -77,7 +83,10 @@ pub async fn open(
                 .build()
                 .await
             {
-                Ok(d) => { db = Some(d); break; }
+                Ok(d) => {
+                    db = Some(d);
+                    break;
+                }
                 Err(e) => {
                     tracing::debug!(attempt, error = %e, "index DB open failed, retrying...");
                     last_err = Some(e);
@@ -86,14 +95,25 @@ pub async fn open(
                 }
             }
         }
-        db.ok_or_else(|| anyhow::anyhow!(
-            "Failed to open index DB after {INDEX_OPEN_ATTEMPTS} attempts: {}",
-            last_err.map(|e| e.to_string()).unwrap_or_default()
-        ))?
+        db.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Failed to open index DB after {INDEX_OPEN_ATTEMPTS} attempts: {}",
+                last_err.map(|e| e.to_string()).unwrap_or_default()
+            )
+        })?
     };
 
-    let conn = Arc::new(db.connect().context("Failed to connect to index database")?);
+    let conn = Arc::new(
+        db.connect()
+            .context("Failed to connect to index database")?,
+    );
     schema::ensure(&conn).await?;
 
-    Ok(IndexReady { conn, embedder, project_root, git_history, db })
+    Ok(IndexReady {
+        conn,
+        embedder,
+        project_root,
+        git_history,
+        db,
+    })
 }

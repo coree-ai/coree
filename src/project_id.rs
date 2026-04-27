@@ -4,7 +4,7 @@ use std::path::Path;
 /// Derive the project ID for the given project root.
 ///
 /// Precedence:
-/// 1. `config_value` -- from figment (env var or `.tyto.toml`)
+/// 1. `config_value` -- from figment (env var or `.coree.toml`)
 /// 2. Git remote URL (origin) -- normalised to a slug; unique across machines
 /// 3. Canonical full path of `project_root` -- unique per machine, human-readable
 /// 4. `"unknown"` -- final fallback
@@ -12,7 +12,7 @@ use std::path::Path;
 /// Always returns a non-empty string. Logs the resolved value to stderr.
 pub fn resolve(project_root: &Path, config_value: Option<&str>) -> String {
     if let Some(v) = config_value.filter(|v| !v.is_empty()) {
-        return log_and_return(v.to_string(), ".tyto.toml / env var");
+        return log_and_return(v.to_string(), ".coree.toml / env var");
     }
     if let Some(slug) = git_remote_slug(project_root) {
         return log_and_return(slug, "git remote URL");
@@ -26,7 +26,7 @@ pub fn resolve(project_root: &Path, config_value: Option<&str>) -> String {
 
 /// Infer a project ID from the filesystem without logging.
 /// Same fallback chain as `resolve` but skips the config_value check.
-/// Used by `Config::load` to seed a new `.tyto.toml` without producing a
+/// Used by `Config::load` to seed a new `.coree.toml` without producing a
 /// double log line (resolve is called again after load with the written value).
 pub fn infer(project_root: &Path) -> String {
     if let Some(slug) = git_remote_slug(project_root) {
@@ -56,8 +56,7 @@ fn git_remote_slug(project_root: &Path) -> Option<String> {
             in_origin = trimmed == r#"[remote "origin"]"#;
             continue;
         }
-        if in_origin
-            && let Some(rest) = trimmed.strip_prefix("url") {
+        if in_origin && let Some(rest) = trimmed.strip_prefix("url") {
             let url = rest.trim_start_matches([' ', '=']).trim();
             if !url.is_empty() {
                 return Some(normalise_remote_url(url));
@@ -89,7 +88,7 @@ fn normalise_remote_url(url: &str) -> String {
 }
 
 fn log_and_return(id: String, source: &str) -> String {
-    eprintln!("tyto: project_id = {id:?} (from {source})");
+    eprintln!("coree: project_id = {id:?} (from {source})");
     id
 }
 
@@ -100,24 +99,24 @@ mod tests {
     #[test]
     fn normalise_ssh_remote() {
         assert_eq!(
-            normalise_remote_url("git@github.com:tyto-ai/tyto.git"),
-            "github.com-tyto-ai-tyto"
+            normalise_remote_url("git@github.com:coree-ai/coree.git"),
+            "github.com-coree-ai-coree"
         );
     }
 
     #[test]
     fn normalise_https_remote() {
         assert_eq!(
-            normalise_remote_url("https://github.com/tyto-ai/tyto.git"),
-            "github.com-tyto-ai-tyto"
+            normalise_remote_url("https://github.com/coree-ai/coree.git"),
+            "github.com-coree-ai-coree"
         );
     }
 
     #[test]
     fn normalise_no_git_suffix() {
         assert_eq!(
-            normalise_remote_url("https://github.com/tyto-ai/tyto"),
-            "github.com-tyto-ai-tyto"
+            normalise_remote_url("https://github.com/coree-ai/coree"),
+            "github.com-coree-ai-coree"
         );
     }
 }

@@ -1,5 +1,8 @@
 use anyhow::Result;
-use rmcp::{ClientHandler, ServiceExt, model::{CallToolRequestParams, ClientInfo}};
+use rmcp::{
+    ClientHandler, ServiceExt,
+    model::{CallToolRequestParams, ClientInfo},
+};
 
 use crate::config::Config;
 
@@ -11,7 +14,7 @@ impl ClientHandler for MinimalClient {
     }
 }
 
-/// CLI entry point for `tyto request <tool> [json-args]`.
+/// CLI entry point for `coree request <tool> [json-args]`.
 /// Exits 0 silently when serve is not running.
 pub async fn run(config: &Config, tool: &str, args: Option<&str>) -> Result<()> {
     if let Some(text) = call_tool_on_server(config, tool, args).await? {
@@ -22,7 +25,12 @@ pub async fn run(config: &Config, tool: &str, args: Option<&str>) -> Result<()> 
 
 /// Call the `search` tool on the running serve instance.
 /// Returns None if serve is not reachable, the call fails, or the timeout elapses.
-pub async fn call_search(config: &Config, query: &str, limit: usize, timeout_ms: u64) -> Option<String> {
+pub async fn call_search(
+    config: &Config,
+    query: &str,
+    limit: usize,
+    timeout_ms: u64,
+) -> Option<String> {
     let args = serde_json::json!({"query": query, "limit": limit}).to_string();
     let fut = call_tool_on_server(config, "search", Some(&args));
     with_timeout(fut, timeout_ms).await
@@ -77,7 +85,11 @@ pub async fn call_tool_on_server(
                 return Ok(None);
             }
         };
-        tracing::debug!(elapsed_ms = t_connect.elapsed().as_millis(), tool, "socket connect");
+        tracing::debug!(
+            elapsed_ms = t_connect.elapsed().as_millis(),
+            tool,
+            "socket connect"
+        );
         let client = MinimalClient.serve(stream).await?;
         let result = invoke_tool(client.peer(), tool, args).await?;
         tracing::debug!(elapsed_ms = t.elapsed().as_millis(), tool, "IPC call total");

@@ -4,7 +4,7 @@
 
 - All milestone issues closed
 - CI green on `main`
-- Push access to `tyto-ai/tyto`
+- Push access to `coree-ai/coree`
 
 ## Steps
 
@@ -14,14 +14,14 @@ Check the most recent tag and any open milestones to determine the correct versi
 
 ```bash
 git tag --sort=-version:refname | head -5
-gh api repos/tyto-ai/tyto/milestones | jq '.[].title'
+gh api repos/coree-ai/coree/milestones | jq '.[].title'
 ```
 
 The open milestone title is the target version. If no milestone exists, increment the minor version from the latest tag.
 
 ### 2. Bump versions
 
-`Cargo.toml` and all agent plugin manifests need updating. Plugin versions use a `-N` suffix — reset to `-1` on a new tyto release, or increment if patching the plugin only.
+`Cargo.toml` and all agent plugin manifests need updating. Plugin versions use a `-N` suffix — reset to `-1` on a new coree release, or increment if patching the plugin only.
 
 **`Cargo.toml`:**
 ```

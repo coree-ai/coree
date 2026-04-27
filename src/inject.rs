@@ -6,7 +6,7 @@ use turso::Connection;
 
 use crate::{config::Config, request, retrieve};
 
-const INSTRUCTIONS: &str = "[tyto] Store every decision, discovery, gotcha, failure, and unexpected outcome. \
+const INSTRUCTIONS: &str = "[coree] Store every decision, discovery, gotcha, failure, and unexpected outcome. \
 Err on the side of storing - use importance (0.0-1.0) to signal value, not omission. \
 Failures and unexpected outcomes: type='gotcha', importance >= 0.8. \
 When you find a bug: store it as gotcha before writing the fix. \
@@ -21,14 +21,14 @@ Use search_memory(query) only when you specifically need memory results without 
 capture_note(summary) = your reasoning before/after a change, reviewed next session. \
 store_memory = a fact you would want to search for today or in a future session. \
 They are not interchangeable.\n\
-[tyto tools] search(query) | search_code(query) | get_symbol(name,[file_path]) | \
+[coree tools] search(query) | search_code(query) | get_symbol(name,[file_path]) | \
 store_memories(memories:[{content,type,title,[topic_key,importance,tags,facts,source,pinned]}]) | \
 search_memory(query,[limit,detail]) | get_memories(ids) | \
 list_memories([type,tags,limit,detail]) | capture_note(summary,[context]) | \
 pin_memories(ids,pin) | delete_memories(ids) | \
 list_stale_memories() | evict_stale_memories() | session_context()\n";
 
-/// The three observable states of `tyto serve` from inject's perspective.
+/// The three observable states of `coree serve` from inject's perspective.
 enum ServeState {
     /// No serve process is running. inject should open the DB directly.
     NotRunning,
@@ -48,29 +48,36 @@ fn serve_state(config: &Config) -> ServeState {
         return ServeState::Ready;
     }
     let lock_path = config.serve_lock_path();
-    let Ok(file) = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(&lock_path) else {
+    let Ok(file) = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+    else {
         return ServeState::NotRunning;
     };
     // Ok(()) = we acquired the lock -> nothing is running
     // Err(_) = another process holds it (WouldBlock) -> serve is loading
     match file.try_lock() {
-        Ok(()) => { let _ = file.unlock(); ServeState::NotRunning }
+        Ok(()) => {
+            let _ = file.unlock();
+            ServeState::NotRunning
+        }
         Err(_) => ServeState::Loading,
     }
 }
 
 /// Emitted to the agent when serve is still loading (first-run model download).
 /// UX requirement: always tell the user what is happening, why, and how long.
-const LOADING_MESSAGE: &str =
-    "[tyto] The memory server is still starting up.\n\
-     On first install, tyto downloads a ~22MB embedding model — this takes up to a minute.\n\
+const LOADING_MESSAGE: &str = "[coree] The memory server is still starting up.\n\
+     On first install, coree downloads a ~22MB embedding model — this takes up to a minute.\n\
      Memory tools (search_memory, store_memories, etc.) will return a 'loading' message \
      until startup is complete.\n\n\
      Do the following right now, before responding to the user's request:\n\
-     1. Inform the user: \"tyto is loading its embedding model (first-run setup, ~1 minute). \
+     1. Inform the user: \"coree is loading its embedding model (first-run setup, ~1 minute). \
         Memory context is not available yet.\"\n\
-     2. Continue with the user's request as normal — do not block on tyto.\n\
-     3. Once tyto has finished loading, call the session_context tool to load memory \
+     2. Continue with the user's request as normal — do not block on coree.\n\
+     3. Once coree has finished loading, call the session_context tool to load memory \
         context for this session. If session_context returns a 'loading' message, \
         wait a few seconds and retry.";
 
@@ -86,9 +93,17 @@ pub async fn run(
         return run_stop(budget);
     }
 
-    if let Err(e) = run_inner(inject_type, query_override, limit, budget, socket_timeout_ms).await {
+    if let Err(e) = run_inner(
+        inject_type,
+        query_override,
+        limit,
+        budget,
+        socket_timeout_ms,
+    )
+    .await
+    {
         println!(
-            "[tyto] CRITICAL: Memory system unavailable - memories were NOT loaded for this \
+            "[coree] CRITICAL: Memory system unavailable - memories were NOT loaded for this \
              session and storing new memories will fail. Inform the user of this immediately \
              before doing anything else.\nCause: {e:#}"
         );
@@ -114,11 +129,11 @@ async fn run_inner(
         if inject_type == "session" || inject_type == "compact" {
             let suggested = crate::project_id::infer(&config.project_root);
             println!(
-                "[tyto] tyto has loaded, but there is no `.tyto.toml` configuration \
+                "[coree] coree has loaded, but there is no `.coree.toml` configuration \
                  file for this project, so memories will not be stored or retrieved this \
                  session.\n\
-                 Inform the user of this. Offer to set up tyto by creating a \
-                 `.tyto.toml` file. Suggested configuration:\n\n\
+                 Inform the user of this. Offer to set up coree by creating a \
+                 `.coree.toml` file. Suggested configuration:\n\n\
                  ```toml\n\
                  project_id = \"{suggested}\"\n\
                  ```\n\
@@ -128,15 +143,16 @@ async fn run_inner(
         return Ok(());
     }
 
-    // Check for a crash log written by a previous `tyto serve` session.
+    // Check for a crash log written by a previous `coree serve` session.
     // Output to stdout so it lands in additionalContext before any memory content.
-    let crash_log_path = config.db_path()
+    let crash_log_path = config
+        .db_path()
         .parent()
         .map(|p| p.join("crash.log"))
         .unwrap_or_else(|| std::path::PathBuf::from("crash.log"));
     if let Ok(crash) = std::fs::read_to_string(&crash_log_path) {
         println!(
-            "[tyto] WARNING: tyto crashed in a previous session. \
+            "[coree] WARNING: coree crashed in a previous session. \
              Inform the user of this before doing anything else - \
              recent memories may not have been saved.\nCrash report: {crash}"
         );
@@ -180,10 +196,13 @@ async fn run_inner(
             print_within_budget(&format!("{INSTRUCTIONS}{results}"), budget);
             return Ok(());
         }
-        tracing::debug!(elapsed_ms = t_ipc.elapsed().as_millis(), "IPC unavailable, falling through");
+        tracing::debug!(
+            elapsed_ms = t_ipc.elapsed().as_millis(),
+            "IPC unavailable, falling through"
+        );
     }
 
-    // If `tyto serve` is running locally, skip Db::open to avoid racing on the DB file.
+    // If `coree serve` is running locally, skip Db::open to avoid racing on the DB file.
     // We distinguish Ready (tools work) from Loading (tools return "syncing") so we
     // can give the user accurate information about what is happening and what to expect.
     match state {
@@ -191,7 +210,7 @@ async fn run_inner(
             // Prompt type already handled above via socket delegation.
             if inject_type == "session" || inject_type == "compact" {
                 println!(
-                    "{INSTRUCTIONS}[tyto] MCP server is running — memory context is available via tools. \
+                    "{INSTRUCTIONS}[coree] MCP server is running — memory context is available via tools. \
                      Use search_memory / list_memories for context retrieval this session."
                 );
             }
@@ -207,10 +226,10 @@ async fn run_inner(
         ServeState::NotRunning => {
             if inject_type == "session" || inject_type == "compact" {
                 println!(
-                    "[tyto] tyto serve is not running — memory and code context are unavailable \
+                    "[coree] coree serve is not running — memory and code context are unavailable \
                      for this session.\n\
                      Inform the user of this before doing anything else. \
-                     Ask them to run: tyto serve"
+                     Ask them to run: coree serve"
                 );
             }
         }
@@ -218,8 +237,7 @@ async fn run_inner(
     Ok(())
 }
 
-const STOP_INSTRUCTIONS: &str =
-    "[tyto] End of turn checkpoint - store anything worth keeping before moving on:\n\
+const STOP_INSTRUCTIONS: &str = "[coree] End of turn checkpoint - store anything worth keeping before moving on:\n\
 - Found a bug or unexpected behavior?     -> store_memory type=gotcha importance>=0.8\n\
 - Understood how a subsystem works?       -> store_memory type=how-it-works\n\
 - Made a design or implementation choice? -> store_memory type=decision\n\
@@ -389,11 +407,8 @@ fn format_full_memory(mem: &retrieve::FullMemory) -> String {
 /// Also marks any pending captures as presented.
 ///
 /// Called by `serve::session_context` tool — this is the recovery path when
-/// `tyto serve` was still loading at session start.
-pub async fn build_tool_session_content(
-    conn: &Connection,
-    project_id: &str,
-) -> Result<String> {
+/// `coree serve` was still loading at session start.
+pub async fn build_tool_session_content(conn: &Connection, project_id: &str) -> Result<String> {
     let captures = query_pending_captures(conn, project_id).await?;
     let results = retrieve::list(conn, project_id, None, &[], 500, 0.4).await?;
 
@@ -415,8 +430,10 @@ pub async fn build_tool_session_content(
         included = full_ids.len();
         if !full_ids.is_empty() {
             let full_memories = retrieve::get_full_batch(conn, &full_ids, project_id).await?;
-            let full_map: std::collections::HashMap<String, retrieve::FullMemory> =
-                full_memories.into_iter().map(|m| (m.id.clone(), m)).collect();
+            let full_map: std::collections::HashMap<String, retrieve::FullMemory> = full_memories
+                .into_iter()
+                .map(|m| (m.id.clone(), m))
+                .collect();
             for compact in results.iter().take(included) {
                 if let Some(mem) = full_map.get(&compact.id) {
                     memories_content.push_str(&format_full_memory(mem));
@@ -432,7 +449,11 @@ pub async fn build_tool_session_content(
     let mut out = format_tool_session_content(&captures, &memories_content);
     // Append compact index for memories that didn't fit in the full-content budget.
     if included < results.len() {
-        out.push_str(&crate::format::compact(&results[included..], included, None));
+        out.push_str(&crate::format::compact(
+            &results[included..],
+            included,
+            None,
+        ));
     }
     Ok(out)
 }
@@ -445,7 +466,7 @@ fn print_within_budget(output: &str, budget: usize) {
         let truncated = &output[..budget];
         if let Some(pos) = truncated.rfind('\n') {
             print!("{}", &truncated[..pos]);
-            println!("\n[tyto: output truncated to fit budget]");
+            println!("\n[coree: output truncated to fit budget]");
         } else {
             print!("{truncated}");
         }

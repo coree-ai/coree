@@ -1,5 +1,5 @@
+use coree::store::{StoreRequest, new_write_lock};
 use turso::Connection;
-use tyto::store::{StoreRequest, new_write_lock};
 
 fn dummy_embedding() -> Vec<f32> {
     vec![0.1f32; 384]
@@ -41,7 +41,7 @@ struct TestDb {
 async fn setup() -> TestDb {
     let db = turso::Builder::new_local(":memory:").build().await.unwrap();
     let conn = db.connect().unwrap();
-    tyto::migrations::run(&conn).await.unwrap();
+    coree::migrations::run(&conn).await.unwrap();
     TestDb { conn, _db: db }
 }
 
@@ -55,7 +55,7 @@ async fn migrations_run_on_fresh_db() {
 #[tokio::test]
 async fn migrations_are_idempotent() {
     let db = setup().await;
-    tyto::migrations::run(&db.conn).await.unwrap();
+    coree::migrations::run(&db.conn).await.unwrap();
 }
 
 // --- delete_batch ---
@@ -67,10 +67,14 @@ async fn delete_batch_soft_deletes() {
     seed_memory(&db.conn, "id-b", "test-project").await;
 
     let ids = vec!["id-a".to_string(), "id-b".to_string()];
-    let n = tyto::retrieve::delete_batch(&db.conn, &ids, "test-project").await.unwrap();
+    let n = coree::retrieve::delete_batch(&db.conn, &ids, "test-project")
+        .await
+        .unwrap();
     assert_eq!(n, 2);
 
-    let results = tyto::retrieve::get_full_batch(&db.conn, &ids, "test-project").await.unwrap();
+    let results = coree::retrieve::get_full_batch(&db.conn, &ids, "test-project")
+        .await
+        .unwrap();
     assert!(results.iter().all(|m| m.status == "deleted"));
 }
 
@@ -80,7 +84,9 @@ async fn delete_batch_missing_ids_not_counted() {
     seed_memory(&db.conn, "id-a", "test-project").await;
 
     let ids = vec!["id-a".to_string(), "nonexistent".to_string()];
-    let n = tyto::retrieve::delete_batch(&db.conn, &ids, "test-project").await.unwrap();
+    let n = coree::retrieve::delete_batch(&db.conn, &ids, "test-project")
+        .await
+        .unwrap();
     assert_eq!(n, 1);
 }
 
@@ -90,10 +96,17 @@ async fn delete_batch_is_isolated_by_project_id() {
     seed_memory(&db.conn, "id-a", "test-project").await;
 
     let ids = vec!["id-a".to_string()];
-    let n = tyto::retrieve::delete_batch(&db.conn, &ids, "other-project").await.unwrap();
-    assert_eq!(n, 0, "foreign project must not delete another project's memory");
+    let n = coree::retrieve::delete_batch(&db.conn, &ids, "other-project")
+        .await
+        .unwrap();
+    assert_eq!(
+        n, 0,
+        "foreign project must not delete another project's memory"
+    );
 
-    let results = tyto::retrieve::get_full_batch(&db.conn, &ids, "test-project").await.unwrap();
+    let results = coree::retrieve::get_full_batch(&db.conn, &ids, "test-project")
+        .await
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].status, "active");
 }
@@ -107,7 +120,9 @@ async fn get_full_batch_returns_all_found() {
     seed_memory(&db.conn, "id-b", "test-project").await;
 
     let ids = vec!["id-a".to_string(), "id-b".to_string()];
-    let results = tyto::retrieve::get_full_batch(&db.conn, &ids, "test-project").await.unwrap();
+    let results = coree::retrieve::get_full_batch(&db.conn, &ids, "test-project")
+        .await
+        .unwrap();
     assert_eq!(results.len(), 2);
 }
 
@@ -117,8 +132,13 @@ async fn get_full_batch_is_isolated_by_project_id() {
     seed_memory(&db.conn, "id-a", "test-project").await;
 
     let ids = vec!["id-a".to_string()];
-    let results = tyto::retrieve::get_full_batch(&db.conn, &ids, "other-project").await.unwrap();
-    assert!(results.is_empty(), "foreign project must not read another project's memory");
+    let results = coree::retrieve::get_full_batch(&db.conn, &ids, "other-project")
+        .await
+        .unwrap();
+    assert!(
+        results.is_empty(),
+        "foreign project must not read another project's memory"
+    );
 }
 
 // --- pin_batch ---
@@ -129,14 +149,22 @@ async fn pin_batch_pins_and_unpins() {
     seed_memory(&db.conn, "id-a", "test-project").await;
 
     let ids = vec!["id-a".to_string()];
-    let n = tyto::retrieve::pin_batch(&db.conn, &ids, "test-project", true).await.unwrap();
+    let n = coree::retrieve::pin_batch(&db.conn, &ids, "test-project", true)
+        .await
+        .unwrap();
     assert_eq!(n, 1);
-    let results = tyto::retrieve::get_full_batch(&db.conn, &ids, "test-project").await.unwrap();
+    let results = coree::retrieve::get_full_batch(&db.conn, &ids, "test-project")
+        .await
+        .unwrap();
     assert!(results.iter().all(|m| m.pinned));
 
-    let n = tyto::retrieve::pin_batch(&db.conn, &ids, "test-project", false).await.unwrap();
+    let n = coree::retrieve::pin_batch(&db.conn, &ids, "test-project", false)
+        .await
+        .unwrap();
     assert_eq!(n, 1);
-    let results = tyto::retrieve::get_full_batch(&db.conn, &ids, "test-project").await.unwrap();
+    let results = coree::retrieve::get_full_batch(&db.conn, &ids, "test-project")
+        .await
+        .unwrap();
     assert!(results.iter().all(|m| !m.pinned));
 }
 
@@ -146,8 +174,13 @@ async fn pin_batch_is_isolated_by_project_id() {
     seed_memory(&db.conn, "id-a", "test-project").await;
 
     let ids = vec!["id-a".to_string()];
-    let n = tyto::retrieve::pin_batch(&db.conn, &ids, "other-project", true).await.unwrap();
-    assert_eq!(n, 0, "foreign project must not pin another project's memory");
+    let n = coree::retrieve::pin_batch(&db.conn, &ids, "other-project", true)
+        .await
+        .unwrap();
+    assert_eq!(
+        n, 0,
+        "foreign project must not pin another project's memory"
+    );
 }
 
 #[tokio::test]
@@ -156,9 +189,13 @@ async fn pin_batch_skips_deleted_memories() {
     seed_memory(&db.conn, "id-a", "test-project").await;
 
     let ids = vec!["id-a".to_string()];
-    tyto::retrieve::delete_batch(&db.conn, &ids, "test-project").await.unwrap();
+    coree::retrieve::delete_batch(&db.conn, &ids, "test-project")
+        .await
+        .unwrap();
 
-    let n = tyto::retrieve::pin_batch(&db.conn, &ids, "test-project", true).await.unwrap();
+    let n = coree::retrieve::pin_batch(&db.conn, &ids, "test-project", true)
+        .await
+        .unwrap();
     assert_eq!(n, 0);
 }
 
@@ -169,7 +206,9 @@ async fn list_returns_stored_memories() {
     let db = setup().await;
     seed_memory(&db.conn, "id-a", "test-project").await;
 
-    let results = tyto::retrieve::list(&db.conn, "test-project", None, &[], 10, 0.0).await.unwrap();
+    let results = coree::retrieve::list(&db.conn, "test-project", None, &[], 10, 0.0)
+        .await
+        .unwrap();
     assert!(!results.is_empty());
     assert!(results.iter().any(|r| r.id == "id-a"));
 }
@@ -180,10 +219,14 @@ async fn list_type_filter() {
     // seed_memory inserts type='fact'; confirm filter works
     seed_memory(&db.conn, "id-a", "test-project").await;
 
-    let facts = tyto::retrieve::list(&db.conn, "test-project", Some("fact"), &[], 10, 0.0).await.unwrap();
+    let facts = coree::retrieve::list(&db.conn, "test-project", Some("fact"), &[], 10, 0.0)
+        .await
+        .unwrap();
     assert!(facts.iter().all(|r| r.memory_type == "fact"));
 
-    let decisions = tyto::retrieve::list(&db.conn, "test-project", Some("decision"), &[], 10, 0.0).await.unwrap();
+    let decisions = coree::retrieve::list(&db.conn, "test-project", Some("decision"), &[], 10, 0.0)
+        .await
+        .unwrap();
     assert!(decisions.is_empty());
 }
 
@@ -194,7 +237,7 @@ async fn store_and_get_full_roundtrip() {
     let db = setup().await;
     let lock = new_write_lock();
 
-    let result = tyto::store::store_memory(
+    let result = coree::store::store_memory(
         &db.conn,
         dummy_embedding(),
         &lock,
@@ -207,7 +250,7 @@ async fn store_and_get_full_roundtrip() {
     assert!(!result.id.is_empty());
     assert!(!result.upserted);
 
-    let mem = tyto::retrieve::get_full_batch(&db.conn, &[result.id.clone()], "test-project")
+    let mem = coree::retrieve::get_full_batch(&db.conn, &[result.id.clone()], "test-project")
         .await
         .unwrap()
         .into_iter()
@@ -223,14 +266,29 @@ async fn store_dedup_within_window_returns_same_id() {
     let db = setup().await;
     let lock = new_write_lock();
 
-    let r1 = tyto::store::store_memory(&db.conn, dummy_embedding(), &lock, basic_request("Duplicate content"), 30)
-        .await
-        .unwrap();
-    let r2 = tyto::store::store_memory(&db.conn, dummy_embedding(), &lock, basic_request("Duplicate content"), 30)
-        .await
-        .unwrap();
+    let r1 = coree::store::store_memory(
+        &db.conn,
+        dummy_embedding(),
+        &lock,
+        basic_request("Duplicate content"),
+        30,
+    )
+    .await
+    .unwrap();
+    let r2 = coree::store::store_memory(
+        &db.conn,
+        dummy_embedding(),
+        &lock,
+        basic_request("Duplicate content"),
+        30,
+    )
+    .await
+    .unwrap();
 
-    assert_eq!(r1.id, r2.id, "same content in same session should deduplicate");
+    assert_eq!(
+        r1.id, r2.id,
+        "same content in same session should deduplicate"
+    );
     assert!(!r2.upserted);
 }
 
@@ -241,7 +299,7 @@ async fn topic_key_upsert_updates_content() {
 
     let mut req1 = basic_request("Original content");
     req1.topic_key = Some("my-topic".to_string());
-    let r1 = tyto::store::store_memory(&db.conn, dummy_embedding(), &lock, req1, 30)
+    let r1 = coree::store::store_memory(&db.conn, dummy_embedding(), &lock, req1, 30)
         .await
         .unwrap();
 
@@ -249,14 +307,14 @@ async fn topic_key_upsert_updates_content() {
     let mut req2 = basic_request("Updated content");
     req2.topic_key = Some("my-topic".to_string());
     req2.session_id = "other-session".to_string();
-    let r2 = tyto::store::store_memory(&db.conn, dummy_embedding(), &lock, req2, 30)
+    let r2 = coree::store::store_memory(&db.conn, dummy_embedding(), &lock, req2, 30)
         .await
         .unwrap();
 
     assert_eq!(r1.id, r2.id, "upsert should keep the same ID");
     assert!(r2.upserted);
 
-    let mem = tyto::retrieve::get_full_batch(&db.conn, &[r1.id.clone()], "test-project")
+    let mem = coree::retrieve::get_full_batch(&db.conn, &[r1.id.clone()], "test-project")
         .await
         .unwrap()
         .into_iter()
