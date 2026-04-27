@@ -126,8 +126,14 @@ jobs:
       - name: Extract artifacts
         run: |
           cd dist
-          for f in *.tar.gz; do tar xzf "$f"; done
-          for f in *.zip; do unzip -o "$f"; done
+          for f in *.tar.gz; do
+            tar xzf "$f"
+            mv coree "${f%.tar.gz}"
+          done
+          for f in *.zip; do
+            unzip -o "$f"
+            mv coree.exe "${f%.zip}.exe"
+          done
 
       - name: Fetch embedding model
         run: |
