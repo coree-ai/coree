@@ -34,3 +34,9 @@ for (const key of Object.keys(mainManifest.optionalDependencies)) {
   mainManifest.optionalDependencies[key] = version;
 }
 fs.writeFileSync(path.join(MAIN_PKG, 'package.json'), JSON.stringify(mainManifest, null, 2) + '\n');
+
+// Update plugin.json version to match.
+const pluginJsonPath = path.join(MAIN_PKG, '.claude-plugin', 'plugin.json');
+const pluginManifest = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf8'));
+pluginManifest.version = version;
+fs.writeFileSync(pluginJsonPath, JSON.stringify(pluginManifest, null, 2) + '\n');
