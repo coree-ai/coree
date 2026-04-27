@@ -96,7 +96,18 @@ jobs:
             mv coree.exe "${f%.zip}.exe"
           done
 
+      - name: Check if model package version is new
+        id: model-check
+        run: |
+          VERSION=$(node -p "require('./npm/@coree-ai/coree-model-bge-small-en-v1.5/package.json').version")
+          if npm view "@coree-ai/coree-model-bge-small-en-v1.5@${VERSION}" version 2>/dev/null; then
+            echo "new=false" >> $GITHUB_OUTPUT
+          else
+            echo "new=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Fetch embedding model
+        if: steps.model-check.outputs.new == 'true'
         run: |
           pip install huggingface_hub --quiet
           python3 scripts/fetch-model.py dist/model
@@ -105,6 +116,7 @@ jobs:
         run: node scripts/generate-npm-packages.mjs
 
       - name: Publish model package
+        if: steps.model-check.outputs.new == 'true'
         run: npm publish npm/@coree-ai/coree-model-bge-small-en-v1.5 --access public --provenance
 
       - name: Publish platform packages
