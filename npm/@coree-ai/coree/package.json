@@ -21,9 +21,6 @@
     "node": ">=18"
   },
   "preferUnplugged": true,
-  "dependencies": {
-    "@coree-ai/coree-model-bge-small-en-v1.5": "1.0.2"
-  },
   "optionalDependencies": {
     "@coree-ai/coree-linux-x64": "0.10.0",
     "@coree-ai/coree-linux-arm64": "0.10.0",

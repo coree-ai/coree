@@ -53,23 +53,8 @@ function selectBin() {
   }
 }
 
-function findModelDir() {
-  const modelPkg = '@coree-ai/coree-model-bge-small-en-v1.5/package.json';
-  const searchPaths = [path.join(__dirname, '..')];
-  if (claudeNpmCache) searchPaths.push(claudeNpmCache);
-  for (const p of searchPaths) {
-    try {
-      return path.join(path.dirname(require.resolve(modelPkg, { paths: [p] })), 'model');
-    } catch {}
-  }
-  return null;
-}
-
 const bin = selectBin();
 const childEnv = { ...env };
-
-const modelDir = findModelDir();
-if (modelDir) childEnv.COREE_MODEL_DIR = modelDir;
 
 // Codex: preserve project root from PWD (Node.js does not reset PWD like shells do).
 if (!childEnv.COREE__PROJECT_ROOT && childEnv.PWD && childEnv.PWD !== process.cwd()) {

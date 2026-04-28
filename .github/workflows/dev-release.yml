@@ -99,8 +99,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Dry-run of the npm publish pipeline (binary packages only) on every main push.
-  # Model package is handled separately by model.yml (path-filtered).
+  # Dry-run of the npm publish pipeline on every main push.
   # Uses npm pack instead of npm publish so no npm auth is needed.
   # Uploads .tgz files to the dev GitHub release for manual install testing.
   pack-npm-dev:
