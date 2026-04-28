@@ -82,6 +82,7 @@ const geminiPath = path.join(REPO_ROOT, 'agents/gemini/gemini-extension.json');
 const gemini = readJson(geminiPath);
 gemini.version = `${newVersion}-1`;
 writeJson(geminiPath, gemini);
+replaceInFile(geminiPath, currentVersion, newVersion);
 replaceInFile(path.join(REPO_ROOT, 'agents/gemini/hooks/hooks.json'), currentVersion, newVersion);
 
 console.log(`\nDone. Commit with: git add -u && git commit -m "chore: bump version to ${newVersion}"`);
