@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="docs-layout">
+  {% set docs = get_section(path="docs/_index.md") %}
+  {% set install = get_section(path="docs/installation/_index.md") %}
+
+  <aside class="docs-sidebar">
+    <div class="sidebar-section">
+      <div class="section-label">Overview</div>
+      <a href="{{ get_url(path='docs') | safe }}"
+         {% if current_path == '/docs/' %}class="active"{% endif %}>Introduction</a>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="section-label">Installation</div>
+      {% for p in install.pages %}
+      <a href="{{ p.permalink | safe }}"
+         {% if current_path == p.path %}class="active"{% endif %}>{{ p.title }}</a>
+      {% endfor %}
+    </div>
+
+    <div class="sidebar-section">
+      <div class="section-label">Reference</div>
+      {% for p in docs.pages %}
+      <a href="{{ p.permalink | safe }}"
+         {% if current_path == p.path %}class="active"{% endif %}>{{ p.title }}</a>
+      {% endfor %}
+    </div>
+  </aside>
+
+  <article class="docs-content">
+    <h1>{{ page.title }}</h1>
+    {% if page.description %}
+    <p class="page-desc">{{ page.description }}</p>
+    {% endif %}
+    {{ page.content | safe }}
+  </article>
+</div>
+{% endblock body %}

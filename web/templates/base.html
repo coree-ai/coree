@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}{% if page.title %}{{ page.title }} - coree{% else %}coree{% endif %}{% endblock title %}</title>
+  <meta name="description" content="{% if page.description %}{{ page.description }}{% elif section.description %}{{ section.description }}{% else %}{{ config.description }}{% endif %}">
+  <link rel="stylesheet" href="{{ get_url(path='main.css') | safe }}">
+  <link rel="icon" href="{{ get_url(path='logo.svg') | safe }}" type="image/svg+xml">
+</head>
+<body>
+  {% block header %}
+  <header class="site-header">
+    <a href="{{ config.base_url }}/" class="logo-link">
+      <img src="{{ get_url(path='logo.svg') | safe }}" alt="coree">
+      <span>coree</span>
+    </a>
+    <nav>
+      <a href="{{ get_url(path='docs') | safe }}">Docs</a>
+      <a href="{{ config.extra.github }}" class="nav-github" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </header>
+  {% endblock header %}
+
+  {% block body %}{% endblock body %}
+
+  <footer>
+    <span>coree v{{ config.extra.version }} - Apache-2.0</span>
+    <span><a href="{{ config.extra.github }}" target="_blank" rel="noopener">github.com/coree-ai/coree</a></span>
+  </footer>
+</body>
+</html>

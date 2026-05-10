@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block header %}{% endblock header %}
+
+{% block body %}
+<main>
+  <section class="hero">
+    <div class="hero-identity">
+      <img src="{{ get_url(path='logo.svg') | safe }}" alt="coree" class="hero-logo">
+      <h1>coree</h1>
+    </div>
+    <p class="tagline">Persistent memory and code intelligence for AI agents. Runs locally. Works across sessions.</p>
+
+    <div class="install-snippet">
+      <div class="snippet-bar">Claude Code</div>
+      <pre><span class="c"># add to marketplace then install</span>
+<span class="cmd">claude</span> <span class="arg">plugin marketplace add github:coree-ai/coree</span>
+<span class="cmd">claude</span> <span class="arg">plugin install coree</span></pre>
+    </div>
+
+    <div class="hero-actions">
+      <a href="{{ get_url(path='docs') | safe }}" class="btn btn-primary">Documentation</a>
+      <a href="{{ config.extra.github }}" class="btn btn-secondary" target="_blank" rel="noopener">View on GitHub</a>
+    </div>
+  </section>
+
+  <section class="features">
+    <div class="inner">
+      <h2>What it does</h2>
+      <div class="grid">
+        <div class="card">
+          <h3 data-icon="~">Persistent memory</h3>
+          <p>Stores typed memories - decisions, gotchas, how-it-works notes - and surfaces them at session start. Agents remember what they learned yesterday.</p>
+        </div>
+        <div class="card">
+          <h3 data-icon="#">Hybrid search</h3>
+          <p>One <code>search(query)</code> call searches both memories and source code simultaneously. Vector similarity plus BM25 keyword matching, ranked together.</p>
+        </div>
+        <div class="card">
+          <h3 data-icon="@">Code intelligence</h3>
+          <p>Tree-sitter parses 20+ languages into an indexed database. Git history is indexed for churn analysis and hotspot detection. <code>get_symbol(name)</code> returns signature, history, and volatility score.</p>
+        </div>
+        <div class="card">
+          <h3 data-icon="*">Multi-agent</h3>
+          <p>One memory store, multiple agents. Switch between Claude Code, Gemini, Codex, and Cursor - the context follows you.</p>
+        </div>
+        <div class="card">
+          <h3 data-icon="&">Local-first</h3>
+          <p>SQLite by default. No account required, no data leaves your machine. Optional Turso remote sync for cross-machine access.</p>
+        </div>
+        <div class="card">
+          <h3 data-icon="+">Zero config</h3>
+          <p>Works immediately after install. Add a <code>.coree.toml</code> to override storage backend, remote sync, or indexing behaviour.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="agents">
+    <h2>Supported agents</h2>
+    <div class="agent-list">
+      <a href="{{ get_url(path='docs/installation/claude') | safe }}" class="agent-pill">Claude Code</a>
+      <a href="{{ get_url(path='docs/installation/gemini') | safe }}" class="agent-pill">Gemini CLI</a>
+      <a href="{{ get_url(path='docs/installation/codex') | safe }}" class="agent-pill">OpenAI Codex</a>
+      <a href="{{ get_url(path='docs/installation/cursor') | safe }}" class="agent-pill">Cursor</a>
+      <a href="{{ get_url(path='docs/installation/vscode') | safe }}" class="agent-pill">VS Code</a>
+      <a href="{{ get_url(path='docs/installation/mcp') | safe }}" class="agent-pill">Any MCP client</a>
+    </div>
+  </section>
+
+  <section class="how">
+    <div class="inner">
+      <h2>How it works</h2>
+      <div class="steps">
+        <div class="step">
+          <h3>Session start</h3>
+          <p>The agent calls <code>session_context()</code>. Pending notes from previous sessions are reviewed and promoted to memories. Prior decisions and discoveries are surfaced.</p>
+        </div>
+        <div class="step">
+          <h3>During work</h3>
+          <p>The agent calls <code>search(query)</code> before touching unfamiliar code. Stores findings with <code>store_memories()</code> as it goes - decisions, gotchas, how-it-works.</p>
+        </div>
+        <div class="step">
+          <h3>Code lookups</h3>
+          <p><code>get_symbol(name)</code> returns a function's signature, its git line-range history, commit churn count, and hotspot score without reading the file directly.</p>
+        </div>
+        <div class="step">
+          <h3>Next session</h3>
+          <p>Context is already there. The agent does not have to re-read the codebase or re-discover architectural decisions. Accumulated knowledge compounds over time.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+{% endblock body %}

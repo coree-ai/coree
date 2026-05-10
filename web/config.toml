@@ -1,0 +1,8 @@
+base_url = "https://coree.dev"
+title = "coree"
+description = "Persistent memory and code intelligence for AI agents."
+compile_sass = true
+
+[extra]
+github = "https://github.com/coree-ai/coree"
+version = "0.12.0"
