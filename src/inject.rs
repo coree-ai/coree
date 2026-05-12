@@ -82,6 +82,20 @@ const LOADING_MESSAGE: &str = "[coree] The memory server is still starting up.\n
         context for this session. If session_context returns a 'loading' message, \
         wait a few seconds and retry.";
 
+/// Emitted when the server still has not acquired its lock after the retry window.
+/// This can happen on first install (npx download + model download takes 30-90s).
+/// Never tell the user to run `coree serve` - it starts automatically via the plugin.
+const NOT_RUNNING_MESSAGE: &str = "[coree] The coree memory server has not started yet.\n\
+     This is normal on first install: the server starts automatically in the background \
+     but may take up to a minute to download and initialise.\n\
+     Memory tools are not yet available.\n\n\
+     Do the following right now, before responding to the user's request:\n\
+     1. Inform the user: \"coree is downloading and starting for the first time. \
+        Memory context will be available once it finishes (up to a minute).\"\n\
+     2. Continue with the user's request as normal — do not block on coree.\n\
+     3. Once coree is ready, call the session_context tool. \
+        If it returns a 'loading' message, wait a few seconds and retry.";
+
 pub async fn run(
     inject_type: &str,
     query_override: Option<String>,
@@ -226,12 +240,7 @@ async fn run_inner(
         }
         ServeState::NotRunning => {
             if inject_type == "session" || inject_type == "compact" {
-                println!(
-                    "[coree] coree serve is not running — memory and code context are unavailable \
-                     for this session.\n\
-                     Inform the user of this before doing anything else. \
-                     Ask them to run: coree serve"
-                );
+                println!("{NOT_RUNNING_MESSAGE}");
             }
         }
     }
