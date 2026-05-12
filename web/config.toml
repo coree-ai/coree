@@ -5,4 +5,4 @@ compile_sass = true
 
 [extra]
 github = "https://github.com/coree-ai/coree"
-version = "0.12.0"
+version = "0.13.0"

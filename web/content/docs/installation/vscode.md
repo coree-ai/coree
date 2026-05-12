@@ -17,7 +17,7 @@ Create `.vscode/mcp.json` in your project root:
     "coree": {
       "type": "stdio",
       "command": "npx",
-      "args": ["--yes", "@coree-ai/coree@0.12.0", "serve"]
+      "args": ["--yes", "@coree-ai/coree@0.13.0", "serve"]
     }
   }
 }
@@ -36,7 +36,7 @@ Add to your VS Code `settings.json` (`Ctrl+Shift+P` > "Open User Settings JSON")
       "coree": {
         "type": "stdio",
         "command": "npx",
-        "args": ["--yes", "@coree-ai/coree@0.12.0", "serve"]
+        "args": ["--yes", "@coree-ai/coree@0.13.0", "serve"]
       }
     }
   }

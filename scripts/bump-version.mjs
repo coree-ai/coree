@@ -77,12 +77,18 @@ writeJson(claudePluginPath, claudePlugin);
 replaceInFile(path.join(REPO_ROOT, 'agents/claude/.mcp.json'), currentVersion, newVersion);
 replaceInFile(path.join(REPO_ROOT, 'agents/claude/hooks/hooks.json'), currentVersion, newVersion);
 
-// agents/gemini
-const geminiPath = path.join(REPO_ROOT, 'agents/gemini/gemini-extension.json');
-const gemini = readJson(geminiPath);
-gemini.version = `${newVersion}-1`;
-writeJson(geminiPath, gemini);
-replaceInFile(geminiPath, currentVersion, newVersion);
-replaceInFile(path.join(REPO_ROOT, 'agents/gemini/hooks/hooks.json'), currentVersion, newVersion);
+// agents/claude-local
+const claudeLocalPluginPath = path.join(REPO_ROOT, 'agents/claude-local/plugin/.claude-plugin/plugin.json');
+const claudeLocalPlugin = readJson(claudeLocalPluginPath);
+claudeLocalPlugin.version = `${newVersion}-1`;
+writeJson(claudeLocalPluginPath, claudeLocalPlugin);
+replaceInFile(path.join(REPO_ROOT, 'agents/claude-local/plugin/.mcp.json'), currentVersion, newVersion);
+replaceInFile(path.join(REPO_ROOT, 'agents/claude-local/plugin/hooks/hooks.json'), currentVersion, newVersion);
+
+// web docs
+replaceInFile(path.join(REPO_ROOT, 'web/config.toml'), currentVersion, newVersion);
+for (const doc of ['cursor.md', 'mcp.md', 'vscode.md']) {
+  replaceInFile(path.join(REPO_ROOT, 'web/content/docs/installation', doc), currentVersion, newVersion);
+}
 
 console.log(`\nDone. Commit with: git add -u && git commit -m "chore: bump version to ${newVersion}"`);
