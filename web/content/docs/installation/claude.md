@@ -10,7 +10,7 @@ coree is distributed through the Claude Code plugin marketplace and installs wit
 ## Install
 
 ```bash
-claude plugin marketplace add github:coree-ai/coree
+claude plugin marketplace add github:coree-ai/claude
 claude plugin install coree
 ```
 
