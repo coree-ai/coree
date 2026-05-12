@@ -10,10 +10,10 @@ coree is available as a Gemini CLI extension.
 ## Install
 
 ```bash
-gemini extension install github:coree-ai/coree
+gemini extension install github:coree-ai/gemini
 ```
 
-This installs the extension from the GitHub repository. The extension config at `agents/gemini/gemini-extension.json` registers the coree MCP server and links the `GEMINI.md` context file.
+This installs the extension from the `coree-ai/gemini` repository.
 
 ## What gets installed
 
@@ -21,21 +21,32 @@ The extension provides:
 
 - **MCP server registration** - coree runs via `npx --yes @coree-ai/coree@{{ version }} serve`
 - **`GEMINI.md` context** - instruction file placed in your project, tells the agent how to use the memory and search tools
-- **Settings entry** - optional `COREE__MEMORY__REMOTE_AUTH_TOKEN` for remote sync
 
 ## Context file
 
 `GEMINI.md` is the Gemini equivalent of `CLAUDE.md`. It is automatically used by Gemini CLI as context for the session. It covers the primary `search()` entry point, memory hygiene guidelines, and tool descriptions.
 
-## Remote sync (optional)
+## Environment Variables & Redaction
 
-If you use Turso for remote storage, set the auth token via the extension settings or environment:
+Gemini CLI **redacts sensitive environment variables** (like `TOKEN`, `AUTH`, or `SECRET`) by default when passing them to extensions. 
 
-```bash
-export COREE__MEMORY__REMOTE_AUTH_TOKEN=your-token
+To use remote storage, you must have your `COREE__MEMORY__REMOTE_AUTH_TOKEN` available in your shell environment (e.g., via `export` or a `.env` file). The coree extension is pre-configured to allow these specific variables to pass through the redaction filter.
+
+### Configuration via settings.json
+
+Alternatively, you can explicitly configure the environment in `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "coree": {
+      "env": {
+        "COREE__MEMORY__REMOTE_AUTH_TOKEN": "your-token-here"
+      }
+    }
+  }
+}
 ```
-
-See [Configuration](/docs/configuration/) for the full remote sync setup.
 
 ## Verify
 
