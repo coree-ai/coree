@@ -1,0 +1,35 @@
+name: NPM distribution
+
+# Verifies the npm packaging path end-to-end by downloading directly from the
+# npm registry - no binary build needed. Tests what a real user experiences:
+#   1. npx resolves the platform binary via optionalDependencies
+#   2. bin/coree Node.js launcher executes correctly
+#   3. coree --version, inject, and MCP initialize handshake all pass
+#
+# Complementary to E2E, which tests the raw binary directly and ignores npm/**.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'npm/**'
+      - 'scripts/test-dist.sh'
+  pull_request:
+    paths:
+      - 'npm/**'
+      - 'scripts/test-dist.sh'
+
+jobs:
+  test-dist:
+    name: NPM dist (linux-x64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run distribution test
+        run: bash scripts/test-dist.sh
