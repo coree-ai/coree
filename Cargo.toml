@@ -116,6 +116,9 @@ ignore = "0.4.25"
 # Code intelligence: live file watching for incremental reindex
 notify = { version = "8.2.0", features = ["macos_fsevent"] }
 
+[dev-dependencies]
+figment = { version = "0.10.19", features = ["test"] }
+
 [profile.release]
 strip = true
 opt-level = "z"

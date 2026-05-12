@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
@@ -33,13 +33,17 @@ pub struct StorageConfig {
     #[serde(default)]
     pub mode: StorageMode,
     /// Override the managed-mode base directory.
+    #[serde(default)]
     pub managed_path: Option<PathBuf>,
     /// Path for local mode (relative to project root if not absolute).
+    #[serde(default)]
     pub local_path: Option<PathBuf>,
     /// Only relevant when mode = remote. Defaults to direct.
     #[serde(default)]
     pub remote_mode: RemoteMode,
+    #[serde(default)]
     pub remote_url: Option<String>,
+    #[serde(default)]
     pub remote_auth_token: Option<String>,
 }
 
@@ -91,12 +95,14 @@ impl Default for IndexConfig {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct ProjectRootConfig {
+    #[serde(default)]
     project_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
     /// Project identifier. Affects both memory query scoping and managed path keying.
+    #[serde(default)]
     pub project_id: Option<String>,
     #[serde(default)]
     pub memory: MemoryConfig,
@@ -111,6 +117,23 @@ pub struct Config {
     /// otherwise `.coree.toml` parent -> nearest `.git/` ancestor -> CWD.
     #[serde(default)]
     project_root: Option<PathBuf>,
+}
+
+/// Env provider for COREE__ vars that skips any variable whose value is empty.
+/// Prevents Gemini CLI's ${UNSET_VAR} -> "" expansion from overriding .coree.toml values.
+fn coree_env() -> Env {
+    const PREFIX: &str = "COREE__";
+    let non_empty: std::collections::HashSet<String> = std::env::vars()
+        .filter(|(k, v)| k.starts_with(PREFIX) && !v.is_empty())
+        .map(|(k, _)| k)
+        .collect();
+    Env::raw()
+        .filter_map(move |k| {
+            non_empty
+                .contains(k.as_str())
+                .then(|| k[PREFIX.len()..].into())
+        })
+        .split("__")
 }
 
 impl Config {
@@ -144,7 +167,7 @@ impl Config {
             if let Some(ref path) = global_config {
                 fig = fig.merge(Toml::file(path));
             }
-            fig.merge(Env::prefixed("COREE__").split("__"))
+            fig.merge(coree_env())
         })?;
         let effective_start = bootstrap_root.as_deref().unwrap_or(start_dir);
         let project_config = find_project_config(effective_start);
@@ -157,7 +180,7 @@ impl Config {
         if let Some(ref path) = project_config {
             fig = fig.merge(Toml::file(path));
         }
-        fig = fig.merge(Env::prefixed("COREE__").split("__"));
+        fig = fig.merge(coree_env());
 
         let mut cfg: Config = fig.extract().context("Failed to load configuration")?;
         cfg.source_path = project_config;
@@ -446,8 +469,14 @@ mod tests {
 
     #[test]
     fn find_project_root_falls_back_to_start_dir() {
-        let root = find_project_root(Path::new("/tmp/norepo"), None);
-        assert_eq!(root, PathBuf::from("/tmp/norepo"));
+        // Create an isolated tree with .git at the root so the walk stops there
+        // rather than escaping into the ambient environment where /tmp/.git may exist.
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join(".git")).unwrap();
+        let start = temp.path().join("nested").join("subdir");
+        std::fs::create_dir_all(&start).unwrap();
+        let root = find_project_root(&start, None);
+        assert_eq!(root, temp.path());
     }
 
     #[test]
@@ -479,5 +508,76 @@ mod tests {
             encode_project_path(Path::new("/some/project")),
             "-some-project"
         );
+    }
+
+    // --- coree_env() / empty-var filtering tests ---
+
+    // Verify that an empty COREE__ env var is excluded from the Figment layer entirely,
+    // so it cannot override a value set in a lower-priority source (e.g. a TOML file).
+    #[test]
+    fn empty_env_var_does_not_override_toml() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".coree.toml", "[memory]\nmode = \"remote\"\n")?;
+            jail.set_env("COREE__MEMORY__MODE", "");
+
+            let cfg = Config::load(jail.directory()).unwrap();
+            assert_eq!(cfg.memory.storage.mode, StorageMode::Remote);
+            Ok(())
+        });
+    }
+
+    // A non-empty env var must still win over TOML (standard Figment precedence).
+    #[test]
+    fn non_empty_env_var_overrides_toml() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".coree.toml", "[memory]\nmode = \"remote\"\n")?;
+            jail.set_env("COREE__MEMORY__MODE", "local");
+
+            let cfg = Config::load(jail.directory()).unwrap();
+            assert_eq!(cfg.memory.storage.mode, StorageMode::Local);
+            Ok(())
+        });
+    }
+
+    // An unset var (absent from env) must also leave the TOML value intact.
+    #[test]
+    fn absent_env_var_preserves_toml() {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.create_file(".coree.toml", "[memory]\nmode = \"local\"\n")?;
+
+            let cfg = Config::load(jail.directory()).unwrap();
+            assert_eq!(cfg.memory.storage.mode, StorageMode::Local);
+            Ok(())
+        });
+    }
+
+    // Empty Option<String> env vars (e.g. auth token) should come through as None.
+    #[test]
+    fn empty_env_var_yields_none_for_optional_string() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".coree.toml", "")?;
+            jail.set_env("COREE__MEMORY__REMOTE_AUTH_TOKEN", "");
+
+            let cfg = Config::load(jail.directory()).unwrap();
+            assert_eq!(cfg.memory.storage.remote_auth_token, None);
+            Ok(())
+        });
+    }
+
+    // A non-empty auth token env var must be passed through.
+    #[test]
+    fn non_empty_auth_token_env_var_is_set() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".coree.toml", "")?;
+            jail.set_env("COREE__MEMORY__REMOTE_AUTH_TOKEN", "mytoken");
+
+            let cfg = Config::load(jail.directory()).unwrap();
+            assert_eq!(
+                cfg.memory.storage.remote_auth_token.as_deref(),
+                Some("mytoken")
+            );
+            Ok(())
+        });
     }
 }
