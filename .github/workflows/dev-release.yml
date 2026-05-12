@@ -12,6 +12,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: dev-release
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build (${{ matrix.artifact }})
