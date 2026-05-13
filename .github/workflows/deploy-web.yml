@@ -1,11 +1,6 @@
 name: Deploy website
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "web/**"
-      - "assets/logo.svg"
   workflow_dispatch:
 
 permissions:
