@@ -19,8 +19,20 @@ This installs the extension from the `coree-ai/gemini` repository.
 
 The extension provides:
 
-- **MCP server registration** - coree runs via `npx --yes @coree-ai/coree@{{ version }} serve`
+- **MCP server registration** - coree runs via `npx --yes @coree-ai/coree@<version> serve`
+- **Hooks** - two lifecycle hooks installed automatically (see below)
 - **`GEMINI.md` context** - instruction file placed in your project, tells the agent how to use the memory and search tools
+
+## Hooks
+
+Two hooks are installed automatically with the extension:
+
+| Hook | Command | Purpose |
+|------|---------|---------|
+| `SessionStart` | `inject --type session` | Injects stale notes and session context at the start of each session |
+| `BeforeAgent` | `inject --type prompt --budget 8000` | Injects relevant memories before each agent turn (up to 8 000 tokens) |
+
+These run `npx --yes @coree-ai/coree@<version> inject ...` and prepend the output to the prompt. No manual configuration is required.
 
 ## Context file
 
@@ -28,7 +40,7 @@ The extension provides:
 
 ## Environment Variables & Redaction
 
-Gemini CLI **redacts sensitive environment variables** (like `TOKEN`, `AUTH`, or `SECRET`) by default when passing them to extensions. 
+Gemini CLI **redacts sensitive environment variables** (like `TOKEN`, `AUTH`, or `SECRET`) by default when passing them to extensions.
 
 To use remote storage, you must have your `COREE__MEMORY__REMOTE_AUTH_TOKEN` available in your shell environment (e.g., via `export` or a `.env` file). The coree extension is pre-configured to allow these specific variables to pass through the redaction filter.
 

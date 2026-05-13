@@ -45,6 +45,10 @@ Copy `CLAUDE.md` to your project root so the AI assistant loads coree usage inst
 curl -fsSL https://raw.githubusercontent.com/coree-ai/zed/main/CLAUDE.md -o CLAUDE.md
 ```
 
+## Hooks
+
+Zed does not expose lifecycle hook events for context server extensions. Context injection is driven by the agent following the instructions in `CLAUDE.md`.
+
 ## Environment variables
 
 Set these in your shell profile so Zed inherits them:

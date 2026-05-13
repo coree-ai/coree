@@ -30,7 +30,7 @@ Merge the coree server entry into `~/.codeium/windsurf/mcp_config.json`:
 
 Restart Windsurf after saving.
 
-### Step 2 - Hooks (optional)
+### Step 2 - Hooks (optional but recommended)
 
 Windsurf supports lifecycle hooks that inject coree context automatically. Copy the workspace hooks template to your project root:
 
@@ -40,12 +40,38 @@ curl -fsSL https://raw.githubusercontent.com/coree-ai/windsurf/main/.windsurf/ho
   -o .windsurf/hooks.json
 ```
 
-This wires two hooks:
+For user-scope hooks that apply to all projects, copy to `~/.codeium/windsurf/hooks.json` instead. Hook configs from both scopes are merged at startup (system → user → workspace).
 
-- **`pre_user_prompt`** - injects relevant memories before each prompt (`show_output: true` so you can see what was injected)
-- **`post_cascade_response`** - saves the session summary after each response
+## Hooks
 
-For user-scope hooks that apply to all projects, copy to `~/.codeium/windsurf/hooks.json` instead. Both files are merged at startup (system → user → workspace).
+Two hooks are included in the workspace template. They are not installed automatically - copy the file as described above:
+
+| Hook | Command | Purpose |
+|------|---------|---------|
+| `pre_user_prompt` | `inject --type prompt --budget 8000` | Injects relevant memories before each Cascade prompt (up to 8 000 tokens). Output is shown in the Cascade panel (`show_output: true`). |
+| `post_cascade_response` | `inject --type stop` | Runs post-turn processing after each Cascade response. |
+
+The full hook config:
+
+```json
+{
+  "hooks": {
+    "pre_user_prompt": [
+      {
+        "command": "npx --yes @coree-ai/coree@0.13.0 inject --type prompt --budget 8000",
+        "show_output": true
+      }
+    ],
+    "post_cascade_response": [
+      {
+        "command": "npx --yes @coree-ai/coree@0.13.0 inject --type stop"
+      }
+    ]
+  }
+}
+```
+
+Windsurf exposes 12 total hook events. Pre-hooks can block execution by exiting with code 2. The full list: `pre_user_prompt`, `pre_read_code`, `pre_write_code`, `pre_run_command`, `pre_mcp_tool_use`, `post_cascade_response`, `post_cascade_response_with_transcript`, `post_read_code`, `post_write_code`, `post_run_command`, `post_mcp_tool_use`, `post_setup_worktree`.
 
 ## Verify
 

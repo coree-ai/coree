@@ -20,13 +20,26 @@ On first use, Claude Code invokes coree via `npx`, which downloads the package t
 
 ## What gets installed
 
-The plugin installs three config files into Claude Code's plugin cache:
+The plugin installs four config files into Claude Code's plugin cache:
 
 - **`.mcp.json`** - registers the coree MCP server
-- **`hooks.json`** - wires `session_context()` to the `UserPromptSubmit` and `SessionStart` hooks
+- **`hooks.json`** - wires four lifecycle hooks (see below)
 - **`plugin.json`** - plugin metadata and version pin
 
 No binary is installed at plugin-install time. The binary is fetched via `npx` on first use.
+
+## Hooks
+
+Four hooks are installed automatically and fire without any manual configuration:
+
+| Hook | Command | Purpose |
+|------|---------|---------|
+| `SessionStart` | `inject --type session` | Injects stale notes and session context at the start of each session |
+| `UserPromptSubmit` | `inject --type prompt --budget 8000` | Injects relevant memories before each user prompt (up to 8 000 tokens) |
+| `Stop` | `inject --type stop` | Runs a post-session memory save when the agent stops |
+| `PostCompact` | `inject --type compact` | Re-injects context after Claude compacts the conversation |
+
+These hooks are the primary mechanism for automatic context injection. They run `npx --yes @coree-ai/coree@<version> inject ...` and prepend the output to the prompt or system message.
 
 ## Context file
 

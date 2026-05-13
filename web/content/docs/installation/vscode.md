@@ -25,6 +25,8 @@ Create `.vscode/mcp.json` in your project root:
 
 VS Code picks this up automatically when you open the project. The MCP server will appear in the agent panel.
 
+Note: VS Code uses `"servers"` (not `"mcpServers"`) and requires `"type": "stdio"` on each entry.
+
 ## User scope
 
 Add to your VS Code `settings.json` (`Ctrl+Shift+P` > "Open User Settings JSON"):
@@ -42,6 +44,22 @@ Add to your VS Code `settings.json` (`Ctrl+Shift+P` > "Open User Settings JSON")
   }
 }
 ```
+
+## Context file
+
+Copy `.github/copilot-instructions.md` to your project so GitHub Copilot agent mode loads coree usage instructions:
+
+```bash
+mkdir -p .github
+curl -fsSL https://raw.githubusercontent.com/coree-ai/vscode/main/.github/copilot-instructions.md \
+  -o .github/copilot-instructions.md
+```
+
+GitHub Copilot reads `.github/copilot-instructions.md` and includes it as system context for agent sessions. It covers the primary `search()` entry point, memory hygiene guidelines, and tool descriptions.
+
+## Hooks
+
+VS Code does not support lifecycle hooks for MCP integrations. Context injection is driven by the agent following the instructions in `.github/copilot-instructions.md`.
 
 ## Enable
 

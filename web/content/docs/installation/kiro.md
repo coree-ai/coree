@@ -60,6 +60,12 @@ The workspace config pre-approves all coree tool calls so the agent does not pro
 }
 ```
 
+`disabled: false` enables the server at startup. `autoApprove` lists all coree tool names so the agent can read and write memories without a confirmation prompt on each call.
+
+## Hooks
+
+Kiro does not support lifecycle hooks. Context injection is driven by the agent following coree's MCP tool instructions.
+
 ## Verify
 
 Open a Kiro agent session and ask:

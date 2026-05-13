@@ -38,11 +38,15 @@ OpenClaw uses `mcp.servers` (not `mcpServers`). Add to your project's `openclaw.
 
 ## Context file
 
-Copy `AGENTS.md` to your project root:
+Copy `AGENTS.md` to your project root so the agent loads coree usage instructions:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/coree-ai/openclaw/main/AGENTS.md -o AGENTS.md
 ```
+
+## Hooks
+
+OpenClaw lifecycle hooks (`llm_input`, `llm_output`, etc.) require TypeScript/JavaScript plugin code and cannot be declared as shell command configs. Context injection is driven by the agent following the instructions in `AGENTS.md`.
 
 ## Codex compatibility
 

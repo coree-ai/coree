@@ -10,23 +10,55 @@ coree supports OpenAI Codex via the Codex plugin system.
 ## Install
 
 ```bash
-codex plugin add coree@coree
+codex plugin marketplace add github:coree-ai/codex
+codex plugin install coree
 ```
 
-This installs the plugin from the npm registry. The plugin config registers coree as an MCP server running via `npx`.
+The first command registers the marketplace source. The second installs the plugin into Codex's plugin cache, which registers the coree MCP server.
 
-## Sandbox filesystem access
+## Sandbox configuration
 
-Codex runs in a sandboxed environment with a read-only filesystem by default. coree needs write access to its data directory (`~/.local/share/coree/` on Linux) to operate.
-
-Add a sandbox workspace write entry to your Codex config (`~/.codex/config.toml`):
+Codex sandboxes MCP server processes. coree needs network access (for first-run model download and remote sync) and filesystem write access (for its database and model cache). Add this to `~/.codex/config.toml`, substituting your username:
 
 ```toml
 [sandbox_workspace_write]
-"/home/your-username/.local/share/coree" = true
+network_access = true
+writable_roots = [
+  "/home/you/.cache/coree",
+  "/home/you/.local/share/coree"
+]
 ```
 
-Without this, coree starts in a degraded state. The `diagnose` tool will report a filesystem error if this is the cause.
+Use absolute paths - `~` expansion is not reliable in TOML.
+
+## Context file
+
+The plugin does not automatically place a context file. Copy `AGENTS.md` to your project root so the agent loads coree usage instructions:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coree-ai/codex/main/AGENTS.md -o AGENTS.md
+```
+
+`AGENTS.md` is Codex's equivalent of `CLAUDE.md`. It covers the primary `search()` entry point, memory hygiene guidelines, and tool descriptions.
+
+## Hooks
+
+Codex does not yet support installing hooks from plugins. To enable automatic context injection, add the following to `~/.codex/config.toml`:
+
+```toml
+[hooks.SessionStart]
+command = "npx --yes @coree-ai/coree@0.13.0 inject --type session --budget 8000"
+
+[hooks.UserPromptSubmit]
+command = "npx --yes @coree-ai/coree@0.13.0 inject --type prompt --budget 8000"
+```
+
+| Hook | Purpose |
+|------|---------|
+| `SessionStart` | Injects stale notes and session context at the start of each session |
+| `UserPromptSubmit` | Injects relevant memories before each user prompt (up to 8 000 tokens) |
+
+Without these hooks, coree still works as an MCP server - you can call tools manually. The hooks add automatic context injection equivalent to the Claude Code and Gemini CLI integrations.
 
 ## What gets installed
 
@@ -36,9 +68,18 @@ The plugin installs to `~/.codex/plugins/cache/coree/coree/<version>/`:
 
 The binary is fetched via npx on first use and cached in `~/.npm/_npx/`.
 
+## Environment variables
+
+If you use coree's remote sync, the following env vars must be set in your shell so Codex forwards them to the MCP process:
+
+- `COREE__MEMORY__REMOTE_AUTH_TOKEN`
+- `COREE__MEMORY__REMOTE_URL`
+
+The plugin's `.mcp.json` already lists these in `env_vars` so Codex will forward them if they are present in your shell environment.
+
 ## Verify
 
-Inside a Codex session:
+After installation, start a session and run:
 
 ```
 call the diagnose mcp tool
@@ -51,4 +92,4 @@ If the filesystem sandbox is blocking writes, diagnose will report a `Read-only 
 Codex's plugin sandbox is stricter than Claude Code's. If you see the MCP server start in degraded state, check:
 
 1. The `sandbox_workspace_write` config entry points to the correct path
-2. The npx cache is populated (run `npx --yes @coree-ai/coree@{{ version }} --version` outside the sandbox once to prime it)
+2. The npx cache is populated (run `npx --yes @coree-ai/coree@0.13.0 --version` outside the sandbox once to prime it)
