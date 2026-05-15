@@ -6,10 +6,7 @@
     "tagName": "v${version}",
     "push": true
   },
-  "github": {
-    "release": true,
-    "releaseName": "v${version}"
-  },
+  "github": { "release": false },
   "npm": { "publish": false },
   "plugins": {
     "@release-it/conventional-changelog": {
