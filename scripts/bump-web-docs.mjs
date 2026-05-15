@@ -37,6 +37,15 @@ if (!currentVersion) {
 
 console.log(`web docs: ${currentVersion} -> ${newVersion}\n`);
 
+// Sync optionalDependencies in the main npm package (bumper only updates the version field).
+const mainPkgPath = path.join(REPO_ROOT, 'npm/@coree-ai/coree/package.json');
+const mainPkg = JSON.parse(fs.readFileSync(mainPkgPath, 'utf8'));
+for (const key of Object.keys(mainPkg.optionalDependencies)) {
+  mainPkg.optionalDependencies[key] = newVersion;
+}
+fs.writeFileSync(mainPkgPath, JSON.stringify(mainPkg, null, 2) + '\n');
+console.log(`  updated npm/@coree-ai/coree/package.json optionalDependencies`);
+
 replaceInFile(configPath, currentVersion, newVersion);
 
 const installDir = path.join(REPO_ROOT, 'web', 'content', 'docs', 'installation');
