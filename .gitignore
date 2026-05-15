@@ -1,7 +1,7 @@
 /target
 /dist/
 /tmp/
-/agents/claude-local/plugin/
+node_modules/
 /npm/@coree-ai/coree-linux-x64/coree
 /npm/@coree-ai/coree-linux-arm64/coree
 /npm/@coree-ai/coree-darwin-arm64/coree

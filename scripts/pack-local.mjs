@@ -9,8 +9,11 @@
  *   npx tmp/npm/coree-ai-coree-<version>-local.tgz serve
  *   npx tmp/npm/coree-ai-coree-<version>-local.tgz --version
  *
- * Or install the claude-local plugin in Claude Code:
- *   /plugin install coree-local
+ * Also writes a local Claude plugin to tmp/claude-local/ for testing with
+ * Claude Code. Requires the coree-ai/claude repo as a sibling directory.
+ *
+ * To install as a local plugin:
+ *   claude plugin add tmp/claude-local
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -104,13 +107,17 @@ try {
   fs.writeFileSync(mainPkgPath, JSON.stringify(mainManifest, null, 2) + '\n');
 }
 
-// Write the local plugin files derived from agents/claude/, substituting the npm
-// package reference with the local tarball path.
+// Write the local plugin files derived from the coree-ai/claude sibling repo,
+// substituting the npm package reference with the local tarball path.
 // npx requires the file: URI scheme to run a local tarball.
 const npmRef = `@coree-ai/coree@${baseVersion}`;
 const tgzAbsPath = `file:${path.join(OUT_DIR, path.basename(mainTgz))}`;
-const canonicalDir = path.join(REPO_ROOT, 'agents', 'claude');
-const pluginDir = path.join(REPO_ROOT, 'agents', 'claude-local', 'plugin');
+const canonicalDir = path.resolve(REPO_ROOT, '../claude');
+if (!fs.existsSync(canonicalDir)) {
+  console.error(`\nSkipping local plugin: coree-ai/claude repo not found at ${canonicalDir}`);
+  process.exit(0);
+}
+const pluginDir = path.join(REPO_ROOT, 'tmp', 'claude-local');
 const hooksDir = path.join(pluginDir, 'hooks');
 const claudePluginDir = path.join(pluginDir, '.claude-plugin');
 fs.mkdirSync(hooksDir, { recursive: true });
@@ -140,8 +147,8 @@ for (const entries of Object.values(hooksJson.hooks)) {
 }
 fs.writeFileSync(path.join(hooksDir, 'hooks.json'), JSON.stringify(hooksJson, null, 2) + '\n');
 
-console.log('\nLocal plugin written to agents/claude-local/plugin/');
+console.log('\nLocal plugin written to tmp/claude-local/');
 console.log('\nTo test:');
 console.log(`  npx "${tgzAbsPath}" --version`);
 console.log(`  npx "${tgzAbsPath}" serve`);
-console.log('\nTo install as a local plugin, add agents/claude-local as a marketplace in /plugin');
+console.log('\nTo install as a local plugin: claude plugin add tmp/claude-local');

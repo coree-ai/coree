@@ -1,0 +1,33 @@
+{
+  "git": {
+    "commit": true,
+    "commitMessage": "chore: release ${version}",
+    "tag": true,
+    "tagName": "v${version}",
+    "push": true
+  },
+  "github": {
+    "release": true,
+    "releaseName": "v${version}"
+  },
+  "npm": { "publish": false },
+  "plugins": {
+    "@release-it/conventional-changelog": {
+      "preset": "conventionalcommits",
+      "infile": "CHANGELOG.md"
+    },
+    "@release-it/bumper": {
+      "out": [
+        { "file": "Cargo.toml", "type": "text/plain" },
+        { "file": "npm/@coree-ai/coree/package.json" },
+        { "file": "npm/@coree-ai/coree-linux-x64/package.json" },
+        { "file": "npm/@coree-ai/coree-linux-arm64/package.json" },
+        { "file": "npm/@coree-ai/coree-darwin-arm64/package.json" },
+        { "file": "npm/@coree-ai/coree-win32-x64/package.json" }
+      ]
+    }
+  },
+  "hooks": {
+    "after:bump": "node scripts/bump-web-docs.mjs ${version}"
+  }
+}

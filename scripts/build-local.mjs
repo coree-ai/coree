@@ -31,5 +31,5 @@ const tgzUri = `file:${path.join(outDir, tgz)}`;
 
 run(`npx --yes "${tgzUri}" --version`, 'smoke test: coree --version');
 
-console.log(`\nDone. Local plugin is at agents/claude-local/`);
+console.log(`\nDone. Local plugin is at tmp/claude-local/`);
 console.log(`Tarball: ${tgzUri}`);

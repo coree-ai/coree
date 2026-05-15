@@ -1,0 +1,13 @@
+{
+  "name": "@coree-ai/coree-release",
+  "version": "0.13.0",
+  "private": true,
+  "scripts": {
+    "release": "release-it"
+  },
+  "devDependencies": {
+    "@release-it/bumper": "^6.0.0",
+    "@release-it/conventional-changelog": "^9.0.0",
+    "release-it": "^17.0.0"
+  }
+}

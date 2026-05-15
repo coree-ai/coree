@@ -35,8 +35,3 @@ for (const key of Object.keys(mainManifest.optionalDependencies)) {
 }
 fs.writeFileSync(path.join(MAIN_PKG, 'package.json'), JSON.stringify(mainManifest, null, 2) + '\n');
 
-// Update plugin.json version to match (lives in agents/claude, not the npm package).
-const pluginJsonPath = path.join(REPO_ROOT, 'agents', 'claude', '.claude-plugin', 'plugin.json');
-const pluginManifest = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf8'));
-pluginManifest.version = version;
-fs.writeFileSync(pluginJsonPath, JSON.stringify(pluginManifest, null, 2) + '\n');
