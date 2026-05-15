@@ -25,7 +25,7 @@ To configure coree without the extension, add to your Zed settings (`~/.config/z
     "coree": {
       "command": {
         "path": "npx",
-        "args": ["--yes", "@coree-ai/coree@0.13.0", "serve"],
+        "args": ["--yes", "@coree-ai/coree@0.14.0", "serve"],
         "env": {}
       }
     }

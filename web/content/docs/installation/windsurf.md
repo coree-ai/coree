@@ -18,7 +18,7 @@ Merge the coree server entry into `~/.codeium/windsurf/mcp_config.json`:
   "mcpServers": {
     "coree": {
       "command": "npx",
-      "args": ["--yes", "@coree-ai/coree@0.13.0", "serve"],
+      "args": ["--yes", "@coree-ai/coree@0.14.0", "serve"],
       "env": {
         "COREE__MEMORY__REMOTE_AUTH_TOKEN": "${COREE__MEMORY__REMOTE_AUTH_TOKEN}",
         "COREE__MEMORY__REMOTE_URL": "${COREE__MEMORY__REMOTE_URL}"
@@ -58,13 +58,13 @@ The full hook config:
   "hooks": {
     "pre_user_prompt": [
       {
-        "command": "npx --yes @coree-ai/coree@0.13.0 inject --type prompt --budget 8000",
+        "command": "npx --yes @coree-ai/coree@0.14.0 inject --type prompt --budget 8000",
         "show_output": true
       }
     ],
     "post_cascade_response": [
       {
-        "command": "npx --yes @coree-ai/coree@0.13.0 inject --type stop"
+        "command": "npx --yes @coree-ai/coree@0.14.0 inject --type stop"
       }
     ]
   }
