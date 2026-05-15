@@ -30,7 +30,7 @@ Create or edit `.cursor/mcp.json` in your project root:
   "mcpServers": {
     "coree": {
       "command": "npx",
-      "args": ["--yes", "@coree-ai/coree@0.14.0", "serve"]
+      "args": ["--yes", "@coree-ai/coree@0.14.1", "serve"]
     }
   }
 }
@@ -45,7 +45,7 @@ Create or edit `~/.cursor/mcp.json`:
   "mcpServers": {
     "coree": {
       "command": "npx",
-      "args": ["--yes", "@coree-ai/coree@0.14.0", "serve"]
+      "args": ["--yes", "@coree-ai/coree@0.14.1", "serve"]
     }
   }
 }

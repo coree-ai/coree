@@ -47,10 +47,10 @@ Codex does not yet support installing hooks from plugins. To enable automatic co
 
 ```toml
 [hooks.SessionStart]
-command = "npx --yes @coree-ai/coree@0.14.0 inject --type session --budget 8000"
+command = "npx --yes @coree-ai/coree@0.14.1 inject --type session --budget 8000"
 
 [hooks.UserPromptSubmit]
-command = "npx --yes @coree-ai/coree@0.14.0 inject --type prompt --budget 8000"
+command = "npx --yes @coree-ai/coree@0.14.1 inject --type prompt --budget 8000"
 ```
 
 | Hook | Purpose |
@@ -92,4 +92,4 @@ If the filesystem sandbox is blocking writes, diagnose will report a `Read-only 
 Codex's plugin sandbox is stricter than Claude Code's. If you see the MCP server start in degraded state, check:
 
 1. The `sandbox_workspace_write` config entry points to the correct path
-2. The npx cache is populated (run `npx --yes @coree-ai/coree@0.14.0 --version` outside the sandbox once to prime it)
+2. The npx cache is populated (run `npx --yes @coree-ai/coree@0.14.1 --version` outside the sandbox once to prime it)

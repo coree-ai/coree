@@ -14,7 +14,7 @@ coree runs as a stdio MCP server. Any MCP-compatible agent or client can connect
   "mcpServers": {
     "coree": {
       "command": "npx",
-      "args": ["--yes", "@coree-ai/coree@0.14.0", "serve"]
+      "args": ["--yes", "@coree-ai/coree@0.14.1", "serve"]
     }
   }
 }
@@ -28,7 +28,7 @@ Run the server directly if your client accepts a command and arguments:
 
 ```
 command: npx
-args:    --yes @coree-ai/coree@0.14.0 serve
+args:    --yes @coree-ai/coree@0.14.1 serve
 ```
 
 Or, if you have the binary installed:
@@ -47,7 +47,7 @@ Pass environment variables to the server process to configure storage or remote 
   "mcpServers": {
     "coree": {
       "command": "npx",
-      "args": ["--yes", "@coree-ai/coree@0.14.0", "serve"],
+      "args": ["--yes", "@coree-ai/coree@0.14.1", "serve"],
       "env": {
         "COREE__MEMORY__MODE": "remote",
         "COREE__MEMORY__REMOTE_URL": "libsql://your-db.turso.io",

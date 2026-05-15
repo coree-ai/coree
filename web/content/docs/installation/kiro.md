@@ -30,7 +30,7 @@ curl -fsSL https://raw.githubusercontent.com/coree-ai/kiro/main/.kiro/settings/m
 Open **Settings > MCP Servers** and add:
 
 - **Command**: `npx`
-- **Args**: `--yes @coree-ai/coree@0.14.0 serve`
+- **Args**: `--yes @coree-ai/coree@0.14.1 serve`
 
 ## Config
 
@@ -41,7 +41,7 @@ The workspace config pre-approves all coree tool calls so the agent does not pro
   "mcpServers": {
     "coree": {
       "command": "npx",
-      "args": ["--yes", "@coree-ai/coree@0.14.0", "serve"],
+      "args": ["--yes", "@coree-ai/coree@0.14.1", "serve"],
       "env": {
         "COREE__MEMORY__REMOTE_AUTH_TOKEN": "${COREE__MEMORY__REMOTE_AUTH_TOKEN}",
         "COREE__MEMORY__REMOTE_URL": "${COREE__MEMORY__REMOTE_URL}"
