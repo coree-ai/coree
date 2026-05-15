@@ -17,7 +17,7 @@ jobs:
       - uses: actions/create-github-app-token@v1
         id: app-token
         with:
-          client-id: ${{ vars.COREE_BOT_CLIENT_ID }}
+          app-id: ${{ vars.COREE_BOT_CLIENT_ID }}
           private-key: ${{ secrets.COREE_BOT_PRIVATE_KEY }}
           owner: coree-ai
           repositories: ${{ matrix.repo }}
