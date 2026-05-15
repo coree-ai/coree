@@ -9,11 +9,10 @@ name: NPM distribution
 # Complementary to E2E, which tests the raw binary directly and ignores npm/**.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'npm/**'
-      - 'scripts/test-dist.sh'
+  # Run after Release workflow publishes to npm (packages must exist before testing).
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   pull_request:
     paths:
       - 'npm/**'
@@ -23,6 +22,7 @@ jobs:
   test-dist:
     name: NPM dist (linux-x64)
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'pull_request' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - uses: actions/checkout@v6
