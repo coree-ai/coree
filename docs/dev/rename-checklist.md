@@ -34,9 +34,8 @@ Downstream: `use coree::...` in all `src/*.rs` and `tests/db.rs` will change to 
 | File | References |
 |------|-----------|
 | `src/main.rs` | `#[command(name = "coree", ...)]`, `use coree::...`, user-facing strings `"coree inject error"`, `"coree request error"`, MCP server key `"coree"`, help strings |
-| `src/install.rs` | `MCP_SERVER_NAME = "coree"`, JSON keys `mcpServers.coree`, help/error strings |
 | `src/serve.rs` | `struct CoreeServer`, `Implementation::new("coree", ...)`, log strings `"coree: ..."`, `"coree-serve.log"`, tool description strings, `MigrateToTursoInput` struct name (Turso is a dependency name, not ours -- keep as-is unless desired) |
-| `src/status.rs` | `println!("coree v{}", ...)`, `"run 'coree install'"` |
+| `src/status.rs` | `println!("coree v{}", ...)` |
 | `src/embed.rs` | `COREE_MODEL_DIR`, `COREE_FORCE_MODEL_REFRESH`, `[coree]` log prefix, `.join("coree")` cache subdir |
 | `src/log.rs` | `[coree]` log prefix |
 | `src/migrations.rs` | `[coree] WARNING` log prefix |

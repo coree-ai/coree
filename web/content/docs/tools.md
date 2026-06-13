@@ -113,27 +113,6 @@ Triggers a manual sync between the local replica and the remote Turso database. 
 
 ---
 
-## Agent integration
-
-### `install(target, scope?)`
-
-Installs coree for a supported agent target. Writes the appropriate config files.
-
-| Target | Scope | Writes |
-|--------|-------|--------|
-| `cursor` | `project` | `.cursor/mcp.json` |
-| `cursor` | `user` | `~/.cursor/mcp.json` |
-| `claude` | - | Returns instructions (use marketplace instead) |
-| `gemini` | - | Returns instructions (use extension instead) |
-
-Scope is required for `cursor`.
-
-### `uninstall(target, scope?)`
-
-Reverses what `install` wrote.
-
----
-
 ## Diagnostics
 
 ### `diagnose()`

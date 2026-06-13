@@ -4,7 +4,6 @@ pub mod embed;
 pub mod format;
 pub mod index;
 pub mod inject;
-pub mod install;
 pub mod log;
 pub mod migrations;
 pub mod project_id;

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use coree::{config::Config, inject, install, remote, request, serve, status};
+use coree::{config::Config, inject, remote, request, serve, status};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -46,11 +46,6 @@ enum Command {
     Remote {
         #[command(subcommand)]
         subcommand: RemoteCommand,
-    },
-    /// Install coree into Claude Code (adds MCP server + hooks to settings.json)
-    Install {
-        #[arg(long, help = "Preview changes without writing anything")]
-        dry_run: bool,
     },
     /// Call an MCP tool on the running coree serve instance via the local socket
     Request {
@@ -122,48 +117,6 @@ async fn main() -> Result<()> {
                     let msg = remote::sync(&config, force).await?;
                     println!("{msg}");
                 }
-            }
-        }
-        Command::Install { dry_run } => {
-            let result = install::run(dry_run)?;
-            let prefix = if dry_run { "[dry-run] " } else { "" };
-            if result.mcp_added {
-                println!(
-                    "{prefix}Added MCP server 'coree' to {}",
-                    result.settings_path.display()
-                );
-            } else {
-                println!("MCP server 'coree' already configured - skipped");
-            }
-            if result.session_hook_added {
-                println!("{prefix}Added SessionStart hook");
-            } else {
-                println!("SessionStart hook already configured - skipped");
-            }
-            if result.prompt_hook_added {
-                println!("{prefix}Added UserPromptSubmit hook");
-            } else {
-                println!("UserPromptSubmit hook already configured - skipped");
-            }
-            if result.stop_hook_added {
-                println!("{prefix}Added Stop hook");
-            } else {
-                println!("Stop hook already configured - skipped");
-            }
-            if result.compact_hook_added {
-                println!("{prefix}Added PostCompact hook");
-            } else {
-                println!("PostCompact hook already configured - skipped");
-            }
-            if !result.mcp_added
-                && !result.session_hook_added
-                && !result.prompt_hook_added
-                && !result.stop_hook_added
-                && !result.compact_hook_added
-            {
-                println!("Nothing to do - coree is already fully configured.");
-            } else if !dry_run {
-                println!("\nDone. Restart Claude Code for changes to take effect.");
             }
         }
         Command::Request { tool, args } => {

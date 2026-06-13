@@ -79,9 +79,6 @@ pub async fn run(config: &Config) -> Result<()> {
             Some(url) => println!("remote:       {url}"),
             None => println!("remote:       (not configured)"),
         }
-    } else {
-        println!();
-        println!("tip: run 'coree install' to configure Claude Code integration");
     }
 
     Ok(())
