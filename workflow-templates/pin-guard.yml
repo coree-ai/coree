@@ -1,0 +1,18 @@
+name: Pin Version Guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Verify pin.major.minor == plugin-version.major.minor
+        run: bash scripts/pin-guard.sh
