@@ -4,6 +4,7 @@ use turso::{Connection, Database};
 
 use crate::{
     config::{Config, RemoteMode, StorageMode},
+    inject::{ServeState, serve_state},
     mlog,
 };
 
@@ -47,6 +48,7 @@ impl Db {
                     .remote_auth_token
                     .as_deref()
                     .context("remote mode requires memory.remote_auth_token")?;
+                let can_purge = matches!(serve_state(config), ServeState::NotRunning);
                 match s.remote_mode {
                     RemoteMode::Direct => {
                         // Limbo 0.6.0 does not yet support direct remote client mode.
@@ -58,7 +60,7 @@ impl Db {
                             .context("Failed to create temp dir for direct-mode replica")?;
                         let path = tmp.path().join("memory.db");
                         let path_str = path.to_str().context("temp path is not valid UTF-8")?;
-                        let db = open_replica_with_recovery(path_str, &path, url, token).await?;
+                        let db = open_replica_with_recovery(path_str, &path, url, token, can_purge).await?;
                         (AnyDb::Synced(db), Some(tmp))
                     }
                     RemoteMode::Replica => {
@@ -68,7 +70,7 @@ impl Db {
                             .to_str()
                             .context("replica DB path is not valid UTF-8")?;
                         let db =
-                            open_replica_with_recovery(path_str, path.as_ref(), url, token).await?;
+                            open_replica_with_recovery(path_str, path.as_ref(), url, token, can_purge).await?;
                         (AnyDb::Synced(db), None)
                     }
                 }
@@ -108,6 +110,7 @@ async fn open_replica_with_recovery(
     path: &Path,
     url: &str,
     token: &str,
+    can_purge: bool,
 ) -> Result<turso::sync::Database> {
     let build = || async {
         let mut last_err = None;
@@ -170,9 +173,16 @@ async fn open_replica_with_recovery(
 
     match try_open().await {
         Ok(db) => return Ok(db),
-        Err(e) => mlog!(
-            "coree: CRITICAL: replica open failed ({e:#}). PURGING local replica files to force full resync..."
-        ),
+        Err(e) => {
+            if !can_purge {
+                return Err(anyhow::anyhow!(
+                    "Failed to open replica (serve may still be running — stop it first): {e:#}"
+                ));
+            }
+            mlog!(
+                "coree: CRITICAL: replica open failed ({e:#}). PURGING local replica files to force full resync..."
+            );
+        }
     }
 
     purge_replica_files(path)?;

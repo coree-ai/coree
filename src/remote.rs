@@ -1,4 +1,5 @@
 use crate::config::{Config, RemoteMode, StorageMode};
+use crate::inject::{ServeState, serve_state};
 use anyhow::{Context, Result, bail};
 use turso::{Builder, Connection, Value, params_from_iter};
 
@@ -10,6 +11,13 @@ pub async fn enable(
 ) -> Result<()> {
     let url = url.context("--url is required")?;
     let token = token.context("--token is required")?;
+
+    match serve_state(config) {
+        ServeState::Ready | ServeState::Loading => {
+            bail!("coree serve is running. Stop it first (pkill coree) before running `coree remote enable`.");
+        }
+        ServeState::NotRunning => {}
+    }
 
     let local_path = config.local_db_path();
     if !local_path.exists() {
@@ -87,6 +95,13 @@ pub async fn enable(
     let (memories, vectors, captures) = copy_all_verbose(&local, &remote, local_count).await?;
     println!("      Done: {memories} memories, {vectors} vectors, {captures} captures.");
 
+    println!("      Pushing to remote ...");
+    remote_db
+        .push()
+        .await
+        .context("Failed to push data to remote — check connectivity and token")?;
+    println!("      Push complete.");
+
     println!("[6/6] Updating config ...");
     // The local database stays at memory.db. Replica mode uses memory.replica.db,
     // so the two files never conflict and memory.db serves as a natural backup.
@@ -119,6 +134,15 @@ pub async fn sync(config: &Config, force: bool) -> Result<String> {
             "Not in remote/replica mode. Run `coree remote enable` first to configure cloud sync."
                 .to_string(),
         );
+    }
+
+    match serve_state(config) {
+        ServeState::Ready | ServeState::Loading => {
+            return Ok("coree serve is running; remote sync is managed automatically by the background sync loop. \
+                No manual sync needed while serve is active."
+                .to_string());
+        }
+        ServeState::NotRunning => {}
     }
 
     let url = s
@@ -186,6 +210,13 @@ pub async fn sync(config: &Config, force: bool) -> Result<String> {
     let local_count = row_count(&local, "memories").await?;
     println!("Copying {local_count} memories to remote ...");
     let (memories, vectors, captures) = copy_all_verbose(&local, &remote, local_count).await?;
+
+    println!("Pushing to remote ...");
+    remote_db
+        .push()
+        .await
+        .context("Failed to push data to remote — check connectivity and token")?;
+    println!("Push complete.");
 
     Ok(format!(
         "Done: seeded {memories} memories, {vectors} vectors, {captures} captures to remote."

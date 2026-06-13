@@ -29,7 +29,7 @@ pin_memories(ids,pin) | delete_memories(ids) | \
 list_stale_memories() | evict_stale_memories() | session_context()\n";
 
 /// The three observable states of `coree serve` from inject's perspective.
-enum ServeState {
+pub enum ServeState {
     /// No serve process is running. inject should open the DB directly.
     NotRunning,
     /// serve.lock is held but serve.ready does not yet exist.
@@ -43,7 +43,7 @@ enum ServeState {
 /// Detect the current serve state via serve.ready (fast) and serve.lock (slow).
 /// The OS releases the advisory lock on serve.lock automatically on any exit.
 /// serve.lock is deleted on graceful shutdown; if it exists and is unlocked, server is not running.
-fn serve_state(config: &Config) -> ServeState {
+pub fn serve_state(config: &Config) -> ServeState {
     if config.serve_ready_path().exists() {
         return ServeState::Ready;
     }

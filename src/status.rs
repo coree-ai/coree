@@ -1,15 +1,24 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::{
     config::{Config, StorageMode},
     db::Db,
+    inject::{ServeState, serve_state},
     migrations, project_id,
 };
 
 pub async fn run(config: &Config) -> Result<()> {
     let pid = project_id::resolve(config.project_root(), config.project_id.as_deref());
 
-    let db = Db::open(config).await?;
+    match serve_state(config) {
+        ServeState::Ready | ServeState::Loading => {
+            anyhow::bail!("coree serve is running. Stop it first (pkill coree) before running `coree status`.");
+        }
+        ServeState::NotRunning => {}
+    }
+
+    let db = Db::open(config).await
+        .context("Failed to open database")?;
     let conn = db.conn;
     migrations::run(&conn).await?;
 
