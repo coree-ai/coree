@@ -181,6 +181,8 @@ fn collect_files(root: &Path, extra_excludes: &[String]) -> Result<Vec<(PathBuf,
 }
 
 /// Remove all index data for a deleted file.
+/// Must explicitly delete dependent rows because Turso has FK enforcement off
+/// by default so ON DELETE CASCADE clauses in the schema are inert.
 pub(crate) async fn remove_file(
     conn: &Arc<turso::Connection>,
     project_root: &Path,
@@ -191,6 +193,18 @@ pub(crate) async fn remove_file(
         .unwrap_or(file_path)
         .to_string_lossy()
         .to_string();
+
+    // FK CASCADE is inert in Turso — delete dependent rows first
+    conn.execute(
+        "DELETE FROM index_vectors WHERE chunk_id IN (SELECT id FROM index_chunks WHERE file_path = ?1)",
+        (rel_path.clone(),),
+    )
+    .await?;
+    conn.execute(
+        "DELETE FROM index_chunk_commits WHERE chunk_id IN (SELECT id FROM index_chunks WHERE file_path = ?1)",
+        (rel_path.clone(),),
+    )
+    .await?;
 
     conn.execute(
         "DELETE FROM index_chunks WHERE file_path = ?1",
@@ -234,7 +248,19 @@ pub(crate) async fn index_file(
         return Ok(0); // unchanged
     }
 
-    // Delete old chunks for this file (CASCADE removes vectors and FTS entries)
+    // FK CASCADE is inert in Turso — delete dependent rows first
+    conn.execute(
+        "DELETE FROM index_vectors WHERE chunk_id IN (SELECT id FROM index_chunks WHERE file_path = ?1)",
+        (rel_path.clone(),),
+    )
+    .await?;
+    conn.execute(
+        "DELETE FROM index_chunk_commits WHERE chunk_id IN (SELECT id FROM index_chunks WHERE file_path = ?1)",
+        (rel_path.clone(),),
+    )
+    .await?;
+
+    // Delete old chunks for this file
     conn.execute(
         "DELETE FROM index_chunks WHERE file_path = ?1",
         (rel_path.clone(),),
