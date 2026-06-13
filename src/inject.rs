@@ -96,9 +96,13 @@ pub async fn run(
     inject_type: &str,
     query_override: Option<String>,
     limit: usize,
-    budget: usize,
+    budget: Option<usize>,
     socket_timeout_ms: u64,
 ) -> Result<()> {
+    let budget = budget.unwrap_or(match inject_type {
+        "session" | "compact" => 32000,
+        _ => 8000,
+    });
     // Stop inject needs no DB - read stop_hook_active from stdin then emit instructions.
     if inject_type == "stop" {
         return run_stop(budget);

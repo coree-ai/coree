@@ -48,7 +48,7 @@ Two hooks are included in the workspace template. They are not installed automat
 
 | Hook | Command | Purpose |
 |------|---------|---------|
-| `pre_user_prompt` | `inject --type prompt --budget 8000` | Injects relevant memories before each Cascade prompt (up to 8 000 tokens). Output is shown in the Cascade panel (`show_output: true`). |
+| `pre_user_prompt` | `inject --type prompt` | Injects relevant memories before each Cascade prompt. Output is shown in the Cascade panel (`show_output: true`). |
 | `post_cascade_response` | `inject --type stop` | Runs post-turn processing after each Cascade response. |
 
 The full hook config:
@@ -58,7 +58,7 @@ The full hook config:
   "hooks": {
     "pre_user_prompt": [
       {
-        "command": "npx --yes @coree-ai/coree@0.14.1 inject --type prompt --budget 8000",
+        "command": "npx --yes @coree-ai/coree@0.14.1 inject --type prompt",
         "show_output": true
       }
     ],

@@ -30,22 +30,22 @@ pub fn run(dry_run: bool) -> Result<InstallResult> {
     let session_hook_added = ensure_hook(
         &mut root,
         "SessionStart",
-        &hook_cmd(&bin, "inject --type session --budget 32000"),
+        &hook_cmd(&bin, "inject --type session"),
     )?;
     let prompt_hook_added = ensure_hook(
         &mut root,
         "UserPromptSubmit",
-        &hook_cmd(&bin, "inject --type prompt --budget 32000"),
+        &hook_cmd(&bin, "inject --type prompt"),
     )?;
     let stop_hook_added = ensure_hook(
         &mut root,
         "Stop",
-        &hook_cmd(&bin, "inject --type stop --budget 32000"),
+        &hook_cmd(&bin, "inject --type stop"),
     )?;
     let compact_hook_added = ensure_hook(
         &mut root,
         "PostCompact",
-        &hook_cmd(&bin, "inject --type compact --budget 32000"),
+        &hook_cmd(&bin, "inject --type compact"),
     )?;
 
     let changed = mcp_added

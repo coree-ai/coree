@@ -35,7 +35,7 @@ Four hooks are installed automatically and fire without any manual configuration
 | Hook | Command | Purpose |
 |------|---------|---------|
 | `SessionStart` | `inject --type session` | Injects stale notes and session context at the start of each session |
-| `UserPromptSubmit` | `inject --type prompt --budget 8000` | Injects relevant memories before each user prompt (up to 8 000 tokens) |
+| `UserPromptSubmit` | `inject --type prompt` | Injects relevant memories before each user prompt |
 | `Stop` | `inject --type stop` | Runs a post-session memory save when the agent stops |
 | `PostCompact` | `inject --type compact` | Re-injects context after Claude compacts the conversation |
 

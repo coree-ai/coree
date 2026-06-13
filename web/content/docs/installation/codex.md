@@ -47,10 +47,10 @@ Codex does not yet support installing hooks from plugins. To enable automatic co
 
 ```toml
 [hooks.SessionStart]
-command = "npx --yes @coree-ai/coree@0.14.1 inject --type session --budget 8000"
+command = "npx --yes @coree-ai/coree@0.14.1 inject --type session"
 
 [hooks.UserPromptSubmit]
-command = "npx --yes @coree-ai/coree@0.14.1 inject --type prompt --budget 8000"
+command = "npx --yes @coree-ai/coree@0.14.1 inject --type prompt"
 ```
 
 | Hook | Purpose |

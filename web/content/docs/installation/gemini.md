@@ -30,7 +30,7 @@ Two hooks are installed automatically with the extension:
 | Hook | Command | Purpose |
 |------|---------|---------|
 | `SessionStart` | `inject --type session` | Injects stale notes and session context at the start of each session |
-| `BeforeAgent` | `inject --type prompt --budget 8000` | Injects relevant memories before each agent turn (up to 8 000 tokens) |
+| `BeforeAgent` | `inject --type prompt` | Injects relevant memories before each agent turn |
 
 These run `npx --yes @coree-ai/coree@<version> inject ...` and prepend the output to the prompt. No manual configuration is required.
 

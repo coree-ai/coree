@@ -33,8 +33,8 @@ enum Command {
         query: Option<String>,
         #[arg(long, default_value_t = 5)]
         limit: usize,
-        #[arg(long, default_value_t = 9500, help = "Max output bytes")]
-        budget: usize,
+        #[arg(long, help = "Max output bytes (default: 32000 session/compact, 8000 prompt/stop)")]
+        budget: Option<usize>,
         #[arg(
             long,
             default_value_t = 400,
