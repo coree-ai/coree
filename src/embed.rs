@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use fastembed::{EmbeddingModel, InitOptions, ModelTrait, TextEmbedding};
 
+use crate::config::env_var_or_unset;
+
 pub const DIMS: usize = 384;
 
 const MODEL: EmbeddingModel = EmbeddingModel::BGESmallENV15;
@@ -19,7 +21,7 @@ pub struct Embedder {
 
 impl Embedder {
     pub fn load() -> Result<Self> {
-        let cache_dir = if let Ok(dir) = std::env::var("COREE_MODEL_DIR") {
+        let cache_dir = if let Some(dir) = env_var_or_unset("COREE_MODEL_DIR") {
             std::path::PathBuf::from(dir)
         } else {
             let dir = dirs::cache_dir()
@@ -37,7 +39,7 @@ impl Embedder {
         // COREE_FORCE_MODEL_REFRESH=1: delete the model cache before loading so
         // fastembed re-downloads a fresh copy. Useful for troubleshooting a
         // corrupted model or testing the cold-start download path locally.
-        if std::env::var("COREE_FORCE_MODEL_REFRESH").as_deref() == Ok("1") && cache_dir.exists() {
+        if env_var_or_unset("COREE_FORCE_MODEL_REFRESH").as_deref() == Some("1") && cache_dir.exists() {
             std::fs::remove_dir_all(&cache_dir)
                 .context("COREE_FORCE_MODEL_REFRESH: failed to remove model cache")?;
         }

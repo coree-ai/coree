@@ -119,17 +119,39 @@ pub struct Config {
     project_root: Option<PathBuf>,
 }
 
-/// Env provider for COREE__ vars that skips any variable whose value is empty.
+/// Returns true if the value should be treated as if the env var was never set.
+/// Handles empty strings (hosts that expand unset ${VAR} to "") and unexpanded
+/// literals like "${COREE_MODEL_DIR}" (hosts like OpenClaw that do not expand).
+pub fn is_unset_env_value(value: &str) -> bool {
+    if value.is_empty() {
+        return true;
+    }
+    if value.starts_with("${") && value.ends_with('}') && !value.contains(' ') {
+        return true;
+    }
+    false
+}
+
+/// Returns the env var value, or None if it should be treated as unset.
+pub fn env_var_or_unset(key: &str) -> Option<String> {
+    match std::env::var(key) {
+        Ok(v) if !is_unset_env_value(&v) => Some(v),
+        _ => None,
+    }
+}
+
+/// Env provider for COREE__ vars that skips any variable whose value is empty
+/// or an unexpanded literal like "${COREE__MEMORY__MODE}".
 /// Prevents Gemini CLI's ${UNSET_VAR} -> "" expansion from overriding .coree.toml values.
 fn coree_env() -> Env {
     const PREFIX: &str = "COREE__";
-    let non_empty: std::collections::HashSet<String> = std::env::vars()
-        .filter(|(k, v)| k.starts_with(PREFIX) && !v.is_empty())
+    let valid: std::collections::HashSet<String> = std::env::vars()
+        .filter(|(k, v)| k.starts_with(PREFIX) && !is_unset_env_value(v))
         .map(|(k, _)| k)
         .collect();
     Env::raw()
         .filter_map(move |k| {
-            non_empty
+            valid
                 .contains(k.as_str())
                 .then(|| k[PREFIX.len()..].into())
         })
@@ -577,6 +599,72 @@ mod tests {
                 cfg.memory.storage.remote_auth_token.as_deref(),
                 Some("mytoken")
             );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn is_unset_env_value_empty() {
+        assert!(is_unset_env_value(""));
+    }
+
+    #[test]
+    fn is_unset_env_value_literal_var() {
+        assert!(is_unset_env_value("${COREE_MODEL_DIR}"));
+        assert!(is_unset_env_value("${COREE__MEMORY__MODE}"));
+        assert!(is_unset_env_value("${FOO}"));
+    }
+
+    #[test]
+    fn is_unset_env_value_literal_with_digits() {
+        assert!(is_unset_env_value("${VAR_2}"));
+    }
+
+    #[test]
+    fn is_unset_env_value_literal_with_spaces_is_not_unset() {
+        assert!(!is_unset_env_value("${SOME VAR}"));
+    }
+
+    #[test]
+    fn is_unset_env_value_legit_value() {
+        assert!(!is_unset_env_value("/home/user/.cache/coree/models"));
+        assert!(!is_unset_env_value("token123"));
+        assert!(!is_unset_env_value("1"));
+    }
+
+    #[test]
+    fn is_unset_env_value_partial_pattern_not_unset() {
+        assert!(!is_unset_env_value("${incomplete"));
+        assert!(!is_unset_env_value("noprefix}"));
+        assert!(!is_unset_env_value("pre${VAR}post"));
+    }
+
+    // COREE__ vars with literal ${...} values are dropped so TOML is preserved.
+    #[test]
+    fn coree_env_filters_literal_var_values() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("COREE__MEMORY__MODE", "${COREE__MEMORY__MODE}");
+            jail.create_file(".coree.toml", "[memory]\nmode = \"local\"\n")?;
+
+            let cfg = Config::load(jail.directory()).unwrap();
+            assert_eq!(
+                cfg.memory.storage.mode,
+                StorageMode::Local,
+                "TOML value should be preserved when env var is a literal ${{...}}"
+            );
+            Ok(())
+        });
+    }
+
+    // COREE__ vars with empty values are dropped so TOML is preserved (existing behavior).
+    #[test]
+    fn coree_env_filters_empty_values() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("COREE__MEMORY__MODE", "");
+            jail.create_file(".coree.toml", "[memory]\nmode = \"local\"\n")?;
+
+            let cfg = Config::load(jail.directory()).unwrap();
+            assert_eq!(cfg.memory.storage.mode, StorageMode::Local);
             Ok(())
         });
     }

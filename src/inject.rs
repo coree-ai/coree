@@ -363,9 +363,7 @@ fn resolve_prompt_query(query_override: Option<String>) -> String {
         return q;
     }
 
-    if let Ok(v) = env::var("CLAUDE_USER_PROMPT")
-        && !v.is_empty()
-    {
+    if let Some(v) = crate::config::env_var_or_unset("CLAUDE_USER_PROMPT") {
         return v;
     }
 
