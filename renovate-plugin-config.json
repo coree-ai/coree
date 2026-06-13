@@ -50,7 +50,22 @@
       "matchPackageNames": ["@coree-ai/coree"],
       "automerge": false,
       "labels": ["dependencies"],
-      "prBodyNotes": ["Automated pin propagation from coree-ai/coree release."]
+      "prBodyNotes": ["Automated pin propagation from coree-ai/coree release."],
+      "postUpgradeTasks": {
+        "commands": [
+          "node scripts/renovate-post-upgrade.mjs {{{currentVersion}}} {{{newVersion}}}"
+        ],
+        "fileFilters": [
+          "package-lock.json",
+          "package.json",
+          "plugin.json",
+          ".claude-plugin/plugin.json",
+          ".codex-plugin/plugin.json",
+          "gemini-extension.json",
+          "extension.toml"
+        ],
+        "executionMode": "branch"
+      }
     }
   ]
 }
