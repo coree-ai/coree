@@ -163,32 +163,50 @@ pub async fn search(
             top_cosine_dist = format!("{top_dist:.3}"),
             "vector search"
         );
-        if top_dist > MAX_COSINE_DIST {
+        if !vector_ranks.is_empty() && top_dist > MAX_COSINE_DIST {
             tracing::debug!(
                 top_cosine_dist = format!("{top_dist:.3}"),
                 threshold = MAX_COSINE_DIST,
-                "cosine gate: no relevant memories"
+                "cosine gate: suppressing vector results, falling through to keyword"
             );
-            return Ok(vec![]);
+            vector_ranks.clear();
         }
     }
 
-    // Stream B: Keyword search (fallback for FTS5 which is not supported by Limbo yet)
+    // Stream B: Keyword search (fallback for FTS5 which is not supported by Limbo yet).
+    // Per-token LIKE: each whitespace-separated token contributes an OR group so
+    // multi-word natural-language queries can match on any constituent term.
     let mut kw_ranks: HashMap<String, usize> = HashMap::new();
-    {
+    let tokens: Vec<String> = query
+        .split_whitespace()
+        .filter(|t| !t.is_empty())
+        .map(|t| like_escape(t))
+        .collect();
+    if !tokens.is_empty() {
         let t = std::time::Instant::now();
-        let kw_query = format!("%{}%", like_escape(query));
-        let mut rows = conn
-            .query(
-                "SELECT id
-                 FROM memories
-                 WHERE (title LIKE ?1 ESCAPE '\\' OR content LIKE ?1 ESCAPE '\\' OR facts LIKE ?1 ESCAPE '\\')
-                   AND project_id = ?2
-                   AND status = 'active'
-                 LIMIT ?3",
-                (kw_query, project_id.to_string(), (limit * 2) as i64),
-            )
-            .await?;
+        let groups: Vec<String> = tokens
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                let p = i + 1;
+                format!(
+                    "(title LIKE ?{p} ESCAPE '\\' OR content LIKE ?{p} ESCAPE '\\' OR facts LIKE ?{p} ESCAPE '\\')"
+                )
+            })
+            .collect();
+        let sql = format!(
+            "SELECT id FROM memories WHERE ({}) AND project_id = ?{} AND status = 'active' LIMIT ?{}",
+            groups.join(" OR "),
+            tokens.len() + 1,
+            tokens.len() + 2,
+        );
+        let mut params: Vec<Value> = tokens
+            .iter()
+            .map(|t| Value::Text(format!("%{t}%")))
+            .collect();
+        params.push(Value::Text(project_id.to_string()));
+        params.push(Value::Integer((limit * 2) as i64));
+        let mut rows = conn.query(&sql, params_from_iter(params)).await?;
         let mut rank = 0usize;
         while let Some(row) = rows.next().await? {
             let id: String = row.get(0)?;
@@ -641,6 +659,25 @@ pub async fn evict_stale(conn: &Connection, project_id: &str) -> Result<u64> {
         .chain(ids.into_iter().map(Value::Text))
         .collect();
     Ok(conn.execute(&sql_mem, params_from_iter(params_mem)).await?)
+}
+
+/// Check whether any active memories lack a current-model embedding vector,
+/// indicating reembed_stale is still running and semantic recall is incomplete.
+pub async fn reembed_in_progress(conn: &Connection, project_id: &str) -> Result<bool> {
+    let model = crate::embed::model_id();
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM memories m
+             WHERE m.project_id = ?1 AND m.status = 'active'
+               AND NOT EXISTS (
+                 SELECT 1 FROM memory_vectors v
+                 WHERE v.memory_id = m.id AND v.embed_model = ?2
+               )
+             LIMIT 1",
+            (project_id.to_string(), model),
+        )
+        .await?;
+    Ok(rows.next().await?.is_some())
 }
 
 fn days_since(datetime_str: &str, now: &chrono::DateTime<Utc>) -> f64 {

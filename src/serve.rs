@@ -421,18 +421,26 @@ impl CoreeServer {
                 .map_err(|e| tool_err(format!("embed failed: {e}")))?
         };
 
-        retrieve::search(&ready.conn, embedding, &input.query, &project, limit)
+        let results = retrieve::search(&ready.conn, embedding, &input.query, &project, limit)
             .await
-            .map(|results| {
-                if results.is_empty() {
-                    "No memories found.".to_string()
-                } else if summary {
-                    crate::format::summary(&results)
-                } else {
-                    crate::format::compact(&results, 0, None)
-                }
-            })
-            .map_err(|e| tool_err(format!("search_memory failed: {e}")))
+            .map_err(|e| tool_err(format!("search_memory failed: {e}")))?;
+
+        let mut out = if results.is_empty() {
+            "No memories found.".to_string()
+        } else if summary {
+            crate::format::summary(&results)
+        } else {
+            crate::format::compact(&results, 0, None)
+        };
+
+        if retrieve::reembed_in_progress(&ready.conn, &project)
+            .await
+            .unwrap_or(false)
+        {
+            out.push_str("_reembed: \"re-embedding in progress; semantic recall may be reduced until complete\"\n");
+        }
+
+        Ok(out)
     }
 
     #[tool(
@@ -1076,8 +1084,16 @@ impl CoreeServer {
             Some("failed") => ", code_index: \"failed — check coree-serve.log\"",
             _ => "",
         };
+        let reembed_note = if retrieve::reembed_in_progress(&db_ready.conn, &self.project_id)
+            .await
+            .unwrap_or(false)
+        {
+            ", reembed: \"re-embedding in progress; semantic recall may be reduced until complete\""
+        } else {
+            ""
+        };
         out.push_str(&format!(
-            "_meta: {{returned: {total}, total_before_cutoff: {all_count}, truncated: {truncated}{index_field}}}\n"
+            "_meta: {{returned: {total}, total_before_cutoff: {all_count}, truncated: {truncated}{index_field}{reembed_note}}}\n"
         ));
         tracing::debug!(
             elapsed_ms = t_search.elapsed().as_millis(),
