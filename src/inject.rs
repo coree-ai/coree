@@ -473,12 +473,39 @@ fn print_within_budget(output: &str, budget: usize) {
         print!("{output}");
     } else {
         // Truncate at last newline within budget
-        let truncated = &output[..budget];
+        let truncated = &output[..output.floor_char_boundary(budget)];
         if let Some(pos) = truncated.rfind('\n') {
             print!("{}", &truncated[..pos]);
             println!("\n[coree: output truncated to fit budget]");
         } else {
             print!("{truncated}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::print_within_budget;
+
+    #[test]
+    fn budget_mid_codepoint_does_not_panic() {
+        let text = "🐶🐱🐰🐼🐨"; // 5 emoji, 4 bytes each = 20 bytes
+        // Byte 6 lands in the middle of the second emoji (bytes 4-7)
+        print_within_budget(text, 6);
+    }
+
+    #[test]
+    fn budget_beyond_len_prints_all() {
+        print_within_budget("hello", 100);
+    }
+
+    #[test]
+    fn budget_zero() {
+        print_within_budget("abc", 0);
+    }
+
+    #[test]
+    fn budget_at_char_boundary() {
+        print_within_budget("abc", 2);
     }
 }
