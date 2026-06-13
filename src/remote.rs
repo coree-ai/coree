@@ -92,8 +92,8 @@ pub async fn enable(
 
     println!("[5/6] Copying data to remote ...");
     let local_count = row_count(&local, "memories").await?;
-    let (memories, vectors, captures) = copy_all_verbose(&local, &remote, local_count).await?;
-    println!("      Done: {memories} memories, {vectors} vectors, {captures} captures.");
+    let (memories, vectors) = copy_all_verbose(&local, &remote, local_count).await?;
+    println!("      Done: {memories} memories, {vectors} vectors.");
 
     println!("      Pushing to remote ...");
     remote_db
@@ -209,7 +209,7 @@ pub async fn sync(config: &Config, force: bool) -> Result<String> {
 
     let local_count = row_count(&local, "memories").await?;
     println!("Copying {local_count} memories to remote ...");
-    let (memories, vectors, captures) = copy_all_verbose(&local, &remote, local_count).await?;
+    let (memories, vectors) = copy_all_verbose(&local, &remote, local_count).await?;
 
     println!("Pushing to remote ...");
     remote_db
@@ -219,12 +219,12 @@ pub async fn sync(config: &Config, force: bool) -> Result<String> {
     println!("Push complete.");
 
     Ok(format!(
-        "Done: seeded {memories} memories, {vectors} vectors, {captures} captures to remote."
+        "Done: seeded {memories} memories, {vectors} vectors to remote."
     ))
 }
 
-/// Copy all data from `src` to `dst`. Returns (memories, vectors, captures) counts.
-pub async fn copy_all(src: &Connection, dst: &Connection) -> Result<(usize, usize, usize)> {
+/// Copy all data from `src` to `dst`. Returns (memories, vectors) counts.
+pub async fn copy_all(src: &Connection, dst: &Connection) -> Result<(usize, usize)> {
     copy_all_verbose(src, dst, 0).await
 }
 
@@ -232,11 +232,10 @@ async fn copy_all_verbose(
     src: &Connection,
     dst: &Connection,
     total_memories: i64,
-) -> Result<(usize, usize, usize)> {
+) -> Result<(usize, usize)> {
     let memories = copy_memories(src, dst, total_memories).await?;
     let vectors = copy_vectors(src, dst).await?;
-    let captures = copy_captures(src, dst).await?;
-    Ok((memories, vectors, captures))
+    Ok((memories, vectors))
 }
 
 async fn row_count(conn: &Connection, table: &str) -> Result<i64> {
@@ -316,38 +315,6 @@ async fn copy_vectors(local: &Connection, remote: &Connection) -> Result<usize> 
             .execute(
                 "INSERT OR REPLACE INTO memory_vectors (memory_id, embed_model, embedding) VALUES (?1, ?2, ?3)",
                 (row.get::<String>(0)?, row.get::<String>(1)?, row.get::<Vec<u8>>(2)?),
-            )
-            .await?;
-        count += 1;
-    }
-    Ok(count)
-}
-
-async fn copy_captures(local: &Connection, remote: &Connection) -> Result<usize> {
-    let mut rows: turso::Rows = local
-        .query(
-            "SELECT id, project_id, captured_at, tool_name, summary, raw_data, presented_at
-             FROM raw_captures",
-            (),
-        )
-        .await?;
-
-    let mut count = 0usize;
-    while let Some(row) = rows.next().await? {
-        remote
-            .execute(
-                "INSERT OR IGNORE INTO raw_captures
-                    (id, project_id, captured_at, tool_name, summary, raw_data, presented_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
-                (
-                    row.get::<String>(0)?,
-                    row.get::<String>(1)?,
-                    row.get::<String>(2)?,
-                    row.get::<String>(3)?,
-                    row.get::<String>(4)?,
-                    row.get::<String>(5)?,
-                    row.get::<Option<String>>(6)?,
-                ),
             )
             .await?;
         count += 1;

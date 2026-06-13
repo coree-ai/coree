@@ -50,7 +50,7 @@ The workspace config pre-approves all coree tool calls so the agent does not pro
       "autoApprove": [
         "search", "search_code", "search_memory",
         "store_memories", "get_memories", "list_memories",
-        "capture_note", "get_symbol", "session_context",
+        "get_symbol", "session_context",
         "list_stale_memories", "evict_stale_memories",
         "pin_memories", "delete_memories"
       ],

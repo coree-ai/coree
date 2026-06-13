@@ -636,7 +636,7 @@ pub async fn list_stale(conn: &Connection, project_id: &str) -> Result<Vec<Stale
 }
 
 /// Hard-delete all stale memories (those returned by list_stale) and their
-/// dependent rows (memory_vectors, raw_captures). Returns count of memories deleted.
+/// dependent rows (memory_vectors). Returns count of memories deleted.
 /// This is the ONLY place that permanently purges data - turso FK CASCADE is inert.
 pub async fn evict_stale(conn: &Connection, project_id: &str) -> Result<u64> {
     let candidates = list_stale(conn, project_id).await?;
@@ -649,10 +649,6 @@ pub async fn evict_stale(conn: &Connection, project_id: &str) -> Result<u64> {
     let sql_mv = format!("DELETE FROM memory_vectors WHERE memory_id IN ({placeholders})");
     let params_mv: Vec<Value> = ids.iter().cloned().map(Value::Text).collect();
     let _ = conn.execute(&sql_mv, params_from_iter(params_mv)).await;
-
-    let sql_rc = format!("DELETE FROM raw_captures WHERE id IN ({placeholders})");
-    let params_rc: Vec<Value> = ids.iter().cloned().map(Value::Text).collect();
-    let _ = conn.execute(&sql_rc, params_from_iter(params_rc)).await;
 
     let sql_mem = format!("DELETE FROM memories WHERE project_id = ?1 AND id IN ({placeholders})");
     let params_mem: Vec<Value> = std::iter::once(Value::Text(project_id.to_string()))

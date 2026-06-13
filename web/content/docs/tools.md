@@ -82,15 +82,10 @@ Permanently purges all stale memories and their associated vectors. This is irre
 ### `session_context()`
 
 Called at session start. Returns:
-- Pending captures from the previous session (for review and promotion to memories)
 - Most relevant memories for the current project
 - Summary of recently active memory topics
 
 This tool is called automatically by the hooks installed with the Claude Code and Gemini plugins.
-
-### `capture_note(summary, context?)`
-
-Stores a note for review at the next session start. Use for tentative observations during exploration - things you are not ready to commit as a full memory. Captures are reviewed by `session_context()` and can be promoted to memories or discarded.
 
 ---
 

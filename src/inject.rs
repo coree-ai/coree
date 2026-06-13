@@ -1,5 +1,4 @@
 use anyhow::Result;
-use chrono::Utc;
 use std::env;
 use std::io::{IsTerminal, Read};
 use turso::Connection;
@@ -17,14 +16,11 @@ Before starting work, and before reading any file or module not yet examined thi
 call search(query) first — it searches memory, code, and git history simultaneously. \
 Use get_memories(ids) to fetch full content of relevant memory results. \
 Use get_symbol(name) for exact symbol lookups instead of reading files. \
-Use search_memory(query) only when you specifically need memory results without code noise. \
-capture_note(summary) = your reasoning before/after a change, reviewed next session. \
-store_memory = a fact you would want to search for today or in a future session. \
-They are not interchangeable.\n\
+Use search_memory(query) only when you specifically need memory results without code noise.\n\
 [coree tools] search(query) | search_code(query) | get_symbol(name,[file_path]) | \
 store_memories(memories:[{content,type,title,[topic_key,importance,tags,facts,source,pinned]}]) | \
 search_memory(query,[limit,detail]) | get_memories(ids) | \
-list_memories([type,tags,limit,detail]) | capture_note(summary,[context]) | \
+list_memories([type,tags,limit,detail]) | \
 pin_memories(ids,pin) | delete_memories(ids) | \
 list_stale_memories() | evict_stale_memories() | session_context()\n";
 
@@ -251,7 +247,7 @@ const STOP_INSTRUCTIONS: &str = "[coree] End of turn checkpoint - store anything
 - Found a bug or unexpected behavior?     -> store_memory type=gotcha importance>=0.8\n\
 - Understood how a subsystem works?       -> store_memory type=how-it-works\n\
 - Made a design or implementation choice? -> store_memory type=decision\n\
-- Changed your approach mid-task?         -> capture_note(why)\n\
+
 Store inline as you work - do not defer to end of session.";
 
 // Fires on every Claude response completion. Outputs a checkpoint prompt - no DB query.
@@ -280,81 +276,6 @@ fn is_stop_hook_active() -> bool {
 }
 
 const FULL_CONTENT_BUDGET: usize = 30_000;
-
-struct PendingCapture {
-    tool_name: String,
-    captured_at: String,
-    summary: String,
-}
-
-async fn query_pending_captures(
-    conn: &Connection,
-    project_id: &str,
-) -> Result<Vec<PendingCapture>> {
-    let mut rows = conn
-        .query(
-            "SELECT tool_name, captured_at, summary \
-             FROM raw_captures \
-             WHERE project_id = ?1 AND presented_at IS NULL \
-             ORDER BY captured_at ASC",
-            (project_id.to_string(),),
-        )
-        .await?;
-
-    let mut captures = Vec::new();
-    while let Some(row) = rows.next().await? {
-        captures.push(PendingCapture {
-            tool_name: row.get(0)?,
-            captured_at: row.get(1)?,
-            summary: row.get(2)?,
-        });
-    }
-    Ok(captures)
-}
-
-async fn mark_captures_presented(conn: &Connection, project_id: &str) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE raw_captures SET presented_at = ?1 \
-         WHERE project_id = ?2 AND presented_at IS NULL",
-        (now, project_id.to_string()),
-    )
-    .await?;
-    Ok(())
-}
-
-fn format_tool_session_content(captures: &[PendingCapture], memories_content: &str) -> String {
-    let mut out = String::new();
-
-    // Section 1: Raw captures
-    out.push_str("=== PENDING CAPTURES FROM LAST SESSION ===\n");
-    if captures.is_empty() {
-        out.push_str("No raw captures to process from last session.\n");
-    } else {
-        out.push_str(&format!(
-            "{} captures from previous session activity.\n\
-             Review and store memories for non-obvious discoveries \
-             (source='reviewed'). Routine edits with no finding need no memory.\n\n\
-             --- Captures ---\n",
-            captures.len()
-        ));
-        for c in captures {
-            let date = c.captured_at.get(..10).unwrap_or(&c.captured_at);
-            out.push_str(&format!("[{:<12}] {}  {}\n", c.tool_name, date, c.summary));
-        }
-        out.push_str("---\n");
-    }
-
-    // Section 2: Prior memories
-    out.push_str("\n=== PRIOR MEMORIES ===\n");
-    if memories_content.is_empty() {
-        out.push_str("No prior memories for this project.\n");
-    } else {
-        out.push_str(memories_content);
-    }
-
-    out
-}
 
 /// Resolve the query for prompt injection.
 /// Precedence: --query flag > $CLAUDE_USER_PROMPT env > stdin JSON {"prompt":"..."} > stdin raw
@@ -410,17 +331,14 @@ fn format_full_memory(mem: &retrieve::FullMemory) -> String {
 
 /// Build session context content for the `session_context` MCP tool.
 ///
-/// Returns the same captures + memories that the SessionStart hook would inject,
-/// but as a single String suitable for returning directly from a tool call.
-/// Also marks any pending captures as presented.
+/// Returns memories for the current project, formatted for tool output.
 ///
 /// Called by `serve::session_context` tool — this is the recovery path when
 /// `coree serve` was still loading at session start.
 pub async fn build_tool_session_content(conn: &Connection, project_id: &str) -> Result<String> {
-    let captures = query_pending_captures(conn, project_id).await?;
     let results = retrieve::list(conn, project_id, None, &[], 500, 0.4).await?;
 
-    let mut memories_content = String::new();
+    let mut out = String::new();
     let mut included = 0usize;
     if !results.is_empty() {
         let mut accumulated = 0usize;
@@ -444,17 +362,16 @@ pub async fn build_tool_session_content(conn: &Connection, project_id: &str) -> 
                 .collect();
             for compact in results.iter().take(included) {
                 if let Some(mem) = full_map.get(&compact.id) {
-                    memories_content.push_str(&format_full_memory(mem));
+                    out.push_str(&format_full_memory(mem));
                 }
             }
         }
     }
 
-    if !captures.is_empty() {
-        mark_captures_presented(conn, project_id).await?;
+    if out.is_empty() {
+        out.push_str("No prior memories for this project.\n");
     }
 
-    let mut out = format_tool_session_content(&captures, &memories_content);
     // Append compact index for memories that didn't fit in the full-content budget.
     if included < results.len() {
         out.push_str(&crate::format::compact(

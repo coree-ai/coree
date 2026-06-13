@@ -1,6 +1,5 @@
 use crate::mlog;
 use anyhow::Result;
-use chrono::Utc;
 use rmcp::{
     RoleServer, ServerHandler, ServiceExt,
     handler::server::{
@@ -241,19 +240,6 @@ struct PinMemoriesInput {
     #[serde_as(as = "PickFirst<(_, DisplayFromStr)>")]
     #[schemars(with = "bool")]
     pin: bool,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct CaptureNoteInput {
-    /// Brief observation from exploration or tentative finding. Reviewed at next session start.
-    summary: String,
-    /// Context label for the note (e.g. "exploration", "read", "grep"). Defaults to "note".
-    #[serde(default = "default_capture_context")]
-    context: String,
-}
-
-fn default_capture_context() -> String {
-    "note".to_string()
 }
 
 // --- Code intelligence tool input schemas ---
@@ -597,27 +583,6 @@ impl CoreeServer {
     }
 
     #[tool(
-        description = "Stage a lightweight note for review at next session start. Use during exploration for tentative observations not yet ready for a full memory."
-    )]
-    async fn capture_note(
-        &self,
-        Parameters(input): Parameters<CaptureNoteInput>,
-    ) -> Result<String, String> {
-        let ready = self.try_ready()?;
-        let id = Uuid::new_v4().to_string();
-        let now = Utc::now().to_rfc3339();
-        ready.conn
-            .execute(
-                "INSERT INTO raw_captures (id, project_id, captured_at, tool_name, summary, raw_data) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                (id, self.project_id.clone(), now, input.context, input.summary.clone(), input.summary.clone()),
-            )
-            .await
-            .map(|_| format!("Staged note: {}", input.summary))
-            .map_err(|e| tool_err(format!("capture_note failed: {e}")))
-    }
-
-    #[tool(
         description = "Pin or unpin one or more memories. Pinned memories are never evicted and always surface at session start. Use pin=true to pin, pin=false to unpin."
     )]
     async fn pin_memories(
@@ -698,10 +663,9 @@ impl CoreeServer {
     }
 
     #[tool(
-        description = "Load session memory context: pending review captures and top memories for this project. \
+        description = "Load session memory context: top memories for this project. \
         Call this at session start if coree was still loading when the session began (embedding model download on first install). \
-        Returns a 'loading' message if the database is not yet ready — wait a few seconds and retry. \
-        Marks pending captures as presented."
+        Returns a 'loading' message if the database is not yet ready — wait a few seconds and retry."
     )]
     async fn session_context(&self) -> Result<String, String> {
         let ready = self.try_ready()?;
@@ -1129,15 +1093,13 @@ impl ServerHandler for CoreeServer {
                  When you finish understanding a function or module: store how-it-works before moving on. \
                  Store inline as you work - do not defer to end of session. \
                  Use search_memory before significant tasks and get_memories(ids) to fetch full content by ID. \
-                 capture_note(summary) = your reasoning before/after a change, reviewed next session. \
                  store_memories = facts you would want to search for today or in a future session. \
-                 They are not interchangeable. \
                  Set source='reviewed' when storing memories during session-start review. \
                  CODE SEARCH: Use search(query) by default to search memories AND code simultaneously. \
                  Use search_code(query) only when you specifically want code/git results without memory noise. \
                  Use get_symbol(name) for exact symbol lookup — returns signature, git line-range history, hotspot score, and cross-type similar results. \
                  hotspot_score reflects recent modification frequency (higher = more volatile, treat with more scrutiny). \
-                 Memory tools: store_memories | search_memory | get_memories | list_memories | capture_note | pin_memories | delete_memories | remote_sync | session_context | diagnose. \
+                 Memory tools: store_memories | search_memory | get_memories | list_memories | pin_memories | delete_memories | remote_sync | session_context | diagnose. \
                  Code tools: search(query) | search_code(query) | get_symbol(name,[file_path])",
             )
     }

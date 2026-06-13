@@ -5,3 +5,6 @@ DROP INDEX IF EXISTS memories_topic_key;
 CREATE UNIQUE INDEX IF NOT EXISTS memories_topic_key
     ON memories (project_id, topic_key)
     WHERE topic_key IS NOT NULL AND status = 'active';
+
+-- Drop raw_captures table (capture_note feature removed, coree-ai/coree#42, A2).
+DROP TABLE IF EXISTS raw_captures;

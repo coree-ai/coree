@@ -19,7 +19,7 @@ coree stores what agents learn and makes it searchable. At the start of each ses
 
 **Hybrid search** - combines vector similarity search (semantic) with BM25 keyword search over both memories and code in a single ranked result set.
 
-**Session context** - at session start, the agent calls `session_context()`. Pending notes (from `capture_note()`) are reviewed and promoted to memories. The most relevant memories for the current project are returned.
+**Session context** - at session start, the agent calls `session_context()`. The most relevant memories for the current project are returned.
 
 ## Quick start
 
