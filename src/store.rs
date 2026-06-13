@@ -30,6 +30,7 @@ pub struct StoreRequest {
 pub struct StoreResult {
     pub id: String,
     pub upserted: bool,
+    pub redaction_count: usize,
 }
 
 /// Shared write lock - prevents TOCTOU races when multiple hooks fire concurrently.
@@ -50,8 +51,39 @@ pub async fn store_memory(
     req: StoreRequest,
     dedup_window_secs: i64,
 ) -> Result<StoreResult> {
+    let mut redaction_count = 0usize;
+
     let content = sanitize::sanitize(&req.content);
+    if content != req.content {
+        redaction_count += 1;
+    }
     let title = sanitize::sanitize(&req.title);
+    if title != req.title {
+        redaction_count += 1;
+    }
+
+    let tags: Vec<String> = req
+        .tags
+        .iter()
+        .map(|t| {
+            let s = sanitize::sanitize(t);
+            if s != *t {
+                redaction_count += 1;
+            }
+            s
+        })
+        .collect();
+    let facts: Vec<String> = req
+        .facts
+        .iter()
+        .map(|f| {
+            let s = sanitize::sanitize(f);
+            if s != *f {
+                redaction_count += 1;
+            }
+            s
+        })
+        .collect();
 
     let hash = content_hash(&content);
     let now = Utc::now();
@@ -60,11 +92,11 @@ pub async fn store_memory(
     let importance = req.importance.unwrap_or(0.5) as f64;
     let embedding_blob = embed::floats_to_blob(&embedding);
 
-    let tags_json = serde_json::to_string(&req.tags)?;
-    let facts_json = if req.facts.is_empty() {
+    let tags_json = serde_json::to_string(&tags)?;
+    let facts_json = if facts.is_empty() {
         None
     } else {
-        Some(serde_json::to_string(&req.facts)?)
+        Some(serde_json::to_string(&facts)?)
     };
 
     let _guard = lock.lock().await;
@@ -93,6 +125,7 @@ pub async fn store_memory(
         return Ok(StoreResult {
             id: existing_id,
             upserted: false,
+            redaction_count: 0,
         });
     }
 
@@ -146,6 +179,7 @@ pub async fn store_memory(
             return Ok(StoreResult {
                 id: id.clone(),
                 upserted: true,
+                redaction_count,
             });
         }
     }
@@ -176,6 +210,7 @@ pub async fn store_memory(
     Ok(StoreResult {
         id,
         upserted: false,
+        redaction_count,
     })
 }
 

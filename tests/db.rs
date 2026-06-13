@@ -324,3 +324,53 @@ async fn topic_key_upsert_updates_content() {
             .unwrap();
     assert_eq!(mem.content, "Updated content");
 }
+
+#[tokio::test]
+async fn store_redacts_secrets_in_facts_and_tags() {
+    let db = setup().await;
+    let lock = new_write_lock();
+
+    let mut req = basic_request("Normal content about architecture");
+    req.facts = vec![
+        "API key: sk-abc123XYZabc123XYZabc for OpenAI".to_string(),
+        "GitHub token ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZabcd123456 is used".to_string(),
+        "This is a normal fact with no secrets".to_string(),
+    ];
+    req.tags = vec![
+        "api".to_string(),
+        "JWT: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c".to_string(),
+    ];
+
+    let result = coree::store::store_memory(
+        &db.conn,
+        dummy_embedding(),
+        &lock,
+        req,
+        30,
+    )
+    .await
+    .unwrap();
+
+    assert!(!result.id.is_empty());
+    assert!(!result.upserted);
+    assert_eq!(result.redaction_count, 3, "two facts and one tag should be redacted");
+
+    let mem =
+        coree::retrieve::get_full_batch(&db.conn, std::slice::from_ref(&result.id), "test-project")
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+    assert_eq!(mem.content, "Normal content about architecture", "content has no secrets, should be unchanged");
+    let facts = mem.facts.as_deref().unwrap_or("");
+    assert!(!facts.contains("sk-abc"), "sk- token should be redacted in facts");
+    assert!(!facts.contains("ghp_"), "GitHub token should be redacted in facts");
+    assert!(facts.contains("[REDACTED]"), "redacted marker should appear in facts");
+    assert!(facts.contains("normal fact with no secrets"), "normal fact should be unchanged");
+    let tags = mem.tags.as_deref().unwrap_or("");
+    assert!(!tags.contains("eyJ"), "JWT in tags should be redacted");
+    assert!(tags.contains("[REDACTED]"), "redacted marker should appear in tags");
+    assert!(tags.contains("api"), "normal tag should be unchanged");
+}

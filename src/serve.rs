@@ -391,11 +391,20 @@ impl CoreeServer {
                 pinned: memory.pinned,
             };
             match store::store_memory(&ready.conn, embedding, &self.write_lock, req, 30).await {
-                Ok(r) => results.push(if r.upserted {
-                    format!("Updated {}", r.id)
-                } else {
-                    format!("Stored {}", r.id)
-                }),
+                Ok(r) => {
+                    let mut result = if r.upserted {
+                        format!("Updated {}", r.id)
+                    } else {
+                        format!("Stored {}", r.id)
+                    };
+                    if r.redaction_count > 0 {
+                        result.push_str(&format!(
+                            ". redacted {} secret-like value(s)",
+                            r.redaction_count
+                        ));
+                    }
+                    results.push(result);
+                }
                 Err(e) => results.push(tool_err(format!("store failed: {e}"))),
             }
         }
