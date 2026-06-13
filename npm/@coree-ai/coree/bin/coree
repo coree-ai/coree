@@ -57,8 +57,15 @@ const bin = selectBin();
 const childEnv = { ...env };
 
 // Codex: preserve project root from PWD (Node.js does not reset PWD like shells do).
-if (!childEnv.COREE__PROJECT_ROOT && childEnv.PWD && childEnv.PWD !== process.cwd()) {
-  childEnv.COREE__PROJECT_ROOT = childEnv.PWD;
+// Use realpathSync to avoid forking identity when PWD is a logical-symlink alias of cwd.
+if (!childEnv.COREE__PROJECT_ROOT && childEnv.PWD) {
+  try {
+    if (fs.realpathSync(childEnv.PWD) !== process.cwd()) {
+      childEnv.COREE__PROJECT_ROOT = childEnv.PWD;
+    }
+  } catch {
+    childEnv.COREE__PROJECT_ROOT = childEnv.PWD;
+  }
 }
 
 const result = spawnSync(bin, process.argv.slice(2), {
