@@ -1,0 +1,56 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Bump @coree-ai/coree pin in all text files",
+      "fileMatch": [
+        "**/*.md",
+        "**/*.json",
+        "**/*.toml",
+        "**/*.rs",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.mjs",
+        "**/*.yml",
+        "**/*.yaml"
+      ],
+      "matchStrings": [
+        "@coree-ai\\/coree@(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"
+      ],
+      "depName": "@coree-ai/coree",
+      "datasourceTemplate": "npm",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Bump COREE_VERSION constant in opencode src/index.ts",
+      "fileMatch": ["**/src/index.ts"],
+      "matchStrings": [
+        "COREE_VERSION = \"(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\""
+      ],
+      "depName": "@coree-ai/coree",
+      "datasourceTemplate": "npm",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Bump nX.Y.Z shorthand in gemini-extension.json",
+      "fileMatch": ["**/gemini-extension.json"],
+      "matchStrings": [
+        "\"n(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\""
+      ],
+      "depName": "@coree-ai/coree",
+      "datasourceTemplate": "npm",
+      "versioningTemplate": "semver"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchPackageNames": ["@coree-ai/coree"],
+      "automerge": false,
+      "labels": ["dependencies"],
+      "prBodyNotes": ["Automated pin propagation from coree-ai/coree release."]
+    }
+  ]
+}

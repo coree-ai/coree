@@ -11,7 +11,7 @@
 | Component | Example | Notes |
 |-----------|---------|-------|
 | Binary + npm packages | `0.9.1` | Matches `Cargo.toml` exactly |
-| Plugin configs | `0.9.1-1` | `<binary-version>-<plugin-patch>`. Increment the plugin patch (e.g. `0.9.1-1` -> `0.9.1-2`) when changing hook/MCP config **without** a binary release. Reset to `-1` on each new binary version. |
+| Plugin configs | `0.9.1` | `<coree-major>.<coree-minor>.<plugin-patch>`. Plugin version tracks the coree binary major.minor, with its own patch counter. Resets to 0 on coree minor/major bump. |
 | Model package | `1.0.0` | Independent of binary. Only change when the bundled model changes. |
 
 ## Steps
@@ -79,11 +79,13 @@ Pushing the tag triggers the `Release` workflow:
 
 1. **Build jobs** (parallel): Linux x86_64, Linux aarch64, macOS aarch64, Windows x86_64 (~5-7 min)
 2. **publish-npm job** (sequential, after builds):
-   - Checks if model package version is new on npm — skips fetch/publish if already published
    - Publishes platform packages (`@coree-ai/coree-linux-x64` etc.)
    - Publishes main package (`@coree-ai/coree`) last
+3. **trigger-renovate job** (after npm publish):
+   - Dispatches Renovate to scan all plugin repos for stale `@coree-ai/coree` pins
+   - Renovate opens automated PRs to bump pins where outdated
 
-Total: ~12-15 minutes.
+Total: ~12-15 minutes plus Renovate PR creation time.
 
 ### 5. Verify the release
 
@@ -103,8 +105,10 @@ Close the GitHub milestone once the release workflow is green.
 
 If only agent config files change (hooks, MCP settings) with no binary change:
 
-1. Increment the plugin patch in `agents/claude/.claude-plugin/plugin.json` and `agents/gemini/gemini-extension.json` (e.g. `0.9.1-1` -> `0.9.1-2`).
+1. Increment the plugin patch in the plugin's manifest (e.g. `0.9.1` -> `0.9.2`).
 2. Commit and push to `main`. No tag needed — no binary or npm publish occurs.
+
+The plugin version format is `<coree-major>.<coree-minor>.<plugin-patch>`. When the coree binary bumps minor or major, the plugin patch resets to 0 automatically via the version-sync in Renovate postUpgradeTasks.
 
 ---
 
