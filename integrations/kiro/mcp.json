@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "coree": {
+      "command": "npx",
+      "args": ["--yes", "@coree-ai/coree@0.14.1", "serve"],
+      "env": {
+        "COREE__MEMORY__REMOTE_AUTH_TOKEN": "${COREE__MEMORY__REMOTE_AUTH_TOKEN}",
+        "COREE__MEMORY__REMOTE_URL": "${COREE__MEMORY__REMOTE_URL}",
+        "COREE__INDEX__REMOTE_AUTH_TOKEN": "${COREE__INDEX__REMOTE_AUTH_TOKEN}",
+        "COREE__INDEX__REMOTE_URL": "${COREE__INDEX__REMOTE_URL}",
+        "COREE_BINARY_OVERRIDE": "${COREE_BINARY_OVERRIDE}",
+        "COREE_MODEL_DIR": "${COREE_MODEL_DIR}"
+      },
+      "disabled": false,
+      "autoApprove": [
+        "search",
+        "search_code",
+        "search_memory",
+        "store_memories",
+        "get_memories",
+        "list_memories",
+        "get_symbol",
+        "session_context",
+        "list_stale_memories",
+        "pin_memories",
+        "diagnose"
+      ],
+      "disabledTools": []
+    }
+  }
+}

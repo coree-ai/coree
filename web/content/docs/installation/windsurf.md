@@ -36,7 +36,7 @@ Windsurf supports lifecycle hooks that inject coree context automatically. Copy 
 
 ```bash
 mkdir -p .windsurf
-curl -fsSL https://raw.githubusercontent.com/coree-ai/windsurf/main/.windsurf/hooks.json \
+curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/integrations/windsurf/hooks.json \
   -o .windsurf/hooks.json
 ```
 
@@ -72,6 +72,24 @@ The full hook config:
 ```
 
 Windsurf exposes 12 total hook events. Pre-hooks can block execution by exiting with code 2. The full list: `pre_user_prompt`, `pre_read_code`, `pre_write_code`, `pre_run_command`, `pre_mcp_tool_use`, `post_cascade_response`, `post_cascade_response_with_transcript`, `post_read_code`, `post_write_code`, `post_run_command`, `post_mcp_tool_use`, `post_setup_worktree`.
+
+## Context file
+
+Copy `.windsurfrules` to your project so Windsurf Cascade loads coree usage instructions:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/integrations/windsurf/windsurfrules \
+  -o .windsurfrules
+```
+
+Windsurf reads `.windsurfrules` from the project root and includes it as system context for Cascade sessions. It covers the primary `search()` entry point, memory hygiene guidelines, and tool descriptions.
+
+The MCP config is also available as a downloadable file:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/integrations/windsurf/mcp_config.json \
+  -o ~/.codeium/windsurf/mcp_config.json
+```
 
 ## Verify
 

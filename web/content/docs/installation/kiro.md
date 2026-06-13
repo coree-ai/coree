@@ -13,7 +13,7 @@ Kiro supports MCP servers via a JSON config file at `.kiro/settings/mcp.json` (w
 
 ```bash
 mkdir -p .kiro/settings
-curl -fsSL https://raw.githubusercontent.com/coree-ai/kiro/main/.kiro/settings/mcp.json \
+curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/integrations/kiro/mcp.json \
   -o .kiro/settings/mcp.json
 ```
 
@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/coree-ai/kiro/main/.kiro/settings/m
 
 ```bash
 mkdir -p ~/.kiro/settings
-curl -fsSL https://raw.githubusercontent.com/coree-ai/kiro/main/.kiro/settings/mcp.json \
+curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/integrations/kiro/mcp.json \
   -o ~/.kiro/settings/mcp.json
 ```
 
@@ -65,6 +65,18 @@ The workspace config pre-approves all coree tool calls so the agent does not pro
 ## Hooks
 
 Kiro does not support lifecycle hooks. Context injection is driven by the agent following coree's MCP tool instructions.
+
+## Context file
+
+Copy `.kiro/steering/coree.md` to your project so Kiro's agent loads coree usage instructions:
+
+```bash
+mkdir -p .kiro/steering
+curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/integrations/kiro/coree.md \
+  -o .kiro/steering/coree.md
+```
+
+Kiro reads `.kiro/steering/coree.md` from the project root and includes it as system context for agent sessions. It covers the primary `search()` entry point, memory hygiene guidelines, and tool descriptions.
 
 ## Verify
 

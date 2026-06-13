@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "coree": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["--yes", "@coree-ai/coree@0.14.1", "serve"]
+    }
+  }
+}

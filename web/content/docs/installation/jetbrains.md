@@ -20,7 +20,7 @@ JetBrains AI Assistant supports MCP servers from IntelliJ IDEA 2025.1+ (AI Assis
 
 ## Install via config file
 
-Copy `mcp.json` from the `coree-ai/jetbrains` repo to the IDE-version-specific config path:
+Copy `mcp.json` to the IDE-version-specific config path:
 
 | OS | Path |
 |----|------|
@@ -33,7 +33,7 @@ Where `<IDE>` is the product name (e.g. `IntelliJIdea`, `PyCharm`, `WebStorm`, `
 Example for IntelliJ IDEA 2025.1 on Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/coree-ai/jetbrains/main/mcp.json \
+curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/integrations/jetbrains/mcp.json \
   -o ~/.config/JetBrains/IntelliJIdea2025.1/mcp.json
 ```
 
@@ -59,7 +59,7 @@ The config:
 Copy `AGENTS.md` to your project root. JetBrains AI Assistant auto-detects `AGENTS.md` and `CLAUDE.md` at the project root and includes them in agent interactions:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/coree-ai/jetbrains/main/AGENTS.md -o AGENTS.md
+curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/integrations/jetbrains/AGENTS.md -o AGENTS.md
 ```
 
 ## Verify

@@ -51,11 +51,18 @@ Copy `.github/copilot-instructions.md` to your project so GitHub Copilot agent m
 
 ```bash
 mkdir -p .github
-curl -fsSL https://raw.githubusercontent.com/coree-ai/vscode/main/.github/copilot-instructions.md \
+curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/integrations/vscode/copilot-instructions.md \
   -o .github/copilot-instructions.md
 ```
 
 GitHub Copilot reads `.github/copilot-instructions.md` and includes it as system context for agent sessions. It covers the primary `search()` entry point, memory hygiene guidelines, and tool descriptions.
+
+The MCP config is also available as a downloadable file:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/integrations/vscode/mcp.json \
+  -o .vscode/mcp.json
+```
 
 ## Hooks
 

@@ -46,11 +46,18 @@ User scope installs coree for all projects. Project scope installs it only for t
 Copy `.cursorrules` to your project root so Cursor's agent loads coree usage instructions:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/coree-ai/cursor/main/.cursorrules \
+curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/integrations/cursor/.cursorrules \
   -o .cursorrules
 ```
 
 Cursor reads `.cursorrules` from the project root and includes it as system context for agent sessions. It covers the primary `search()` entry point, memory hygiene guidelines, and tool descriptions.
+
+The MCP config is also available as a downloadable file:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/integrations/cursor/mcp.json \
+  -o .cursor/mcp.json
+```
 
 ## Hooks
 

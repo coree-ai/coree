@@ -13,14 +13,9 @@ jobs:
           - antigravity
           - claude
           - codex
-          - cursor
           - gemini
-          - jetbrains
-          - kiro
           - openclaw
           - opencode
-          - vscode
-          - windsurf
           - zed
     steps:
       - uses: actions/create-github-app-token@v1
