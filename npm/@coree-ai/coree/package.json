@@ -13,7 +13,6 @@
   },
   "files": [
     "bin/coree",
-    "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES"
   ],

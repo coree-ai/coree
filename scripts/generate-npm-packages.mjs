@@ -35,3 +35,11 @@ for (const key of Object.keys(mainManifest.optionalDependencies)) {
 }
 fs.writeFileSync(path.join(MAIN_PKG, 'package.json'), JSON.stringify(mainManifest, null, 2) + '\n');
 
+const licenseSrc = path.join(REPO_ROOT, 'LICENSE');
+if (fs.existsSync(licenseSrc)) {
+  fs.copyFileSync(licenseSrc, path.join(MAIN_PKG, 'LICENSE'));
+} else {
+  console.error('Missing LICENSE at repo root');
+  process.exit(1);
+}
+

@@ -7,7 +7,6 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
-      - 'agents/**'
 
 env:
   CARGO_TERM_COLOR: always
@@ -127,7 +126,7 @@ jobs:
           node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('npm/@coree-ai/coree/package.json','utf8')); p.version='${DEV_VERSION}'; fs.writeFileSync('npm/@coree-ai/coree/package.json', JSON.stringify(p,null,2)+'\n');"
 
       - name: Download build artifacts from dev release
-        run: gh release download dev --repo ${{ github.repository }} --dir dist/ --pattern 'coree-*'
+        run: gh release download dev --repo ${{ github.repository }} --dir dist/ --pattern 'coree-linux-*' --pattern 'coree-macos-*' --pattern 'coree-windows-*'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -152,6 +151,16 @@ jobs:
             npm pack "$pkg" --pack-destination dist/
           done
           npm pack npm/@coree-ai/coree --pack-destination dist/
+
+      - name: Clean old npm pack assets
+        run: |
+          RELEASE_ID=$(gh api "repos/${{ github.repository }}/releases/tags/dev" --jq '.id')
+          ASSET_IDS=$(gh api "repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" --jq '.[] | select(.name | startswith("coree-ai-")) | .id')
+          for id in $ASSET_IDS; do
+            gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" || true
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload npm packs to dev release
         run: gh release upload dev dist/coree-ai-*.tgz --clobber --repo ${{ github.repository }}

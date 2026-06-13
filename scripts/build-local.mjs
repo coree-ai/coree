@@ -3,7 +3,7 @@
  * Usage: node scripts/build-local.mjs
  *
  * Builds the Rust binary, packs local npm tarballs, and smoke-tests the result.
- * Output goes to tmp/npm/ and agents/claude-local/.
+ * Output goes to tmp/npm/ and tmp/claude-local/.
  */
 import { execSync } from 'node:child_process';
 import * as path from 'node:path';

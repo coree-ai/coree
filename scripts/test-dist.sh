@@ -88,7 +88,15 @@ echo ""
 # Simulates the SessionStart hook. With no server running, inject exits 0 and
 # emits the not-running message (which Claude uses to tell the user to wait).
 echo "---- Test 2: coree inject --type session ----"
-run_npx inject --type session 2>&1 || true
+INJECT_OUT="$(run_npx inject --type session 2>&1 || true)"
+printf '%s\n' "$INJECT_OUT"
+if ! printf '%s' "$INJECT_OUT" | grep -q 'not running\|no server'; then
+  echo "FAIL: inject did not emit expected server-not-running message"
+  echo "--- raw output ---"
+  printf '%s\n' "$INJECT_OUT"
+  echo "---"
+  exit 1
+fi
 echo ""
 
 # -- Test 3: serve MCP handshake ---------------------------------------------
