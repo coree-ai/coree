@@ -100,7 +100,7 @@ pub async fn store_memory(
     if let Some(ref topic_key) = req.topic_key {
         let existing: Option<String> = conn
             .query(
-                "SELECT id FROM memories WHERE project_id = ?1 AND topic_key = ?2 LIMIT 1",
+                "SELECT id FROM memories WHERE project_id = ?1 AND topic_key = ?2 AND status = 'active' LIMIT 1",
                 (req.project_id.clone(), topic_key.clone()),
             )
             .await?
@@ -114,7 +114,7 @@ pub async fn store_memory(
                 "UPDATE memories
                  SET content = ?1, title = ?2, tags = ?3, facts = ?4, importance = ?5,
                      content_hash = ?6, updated_at = ?7, source = COALESCE(?8, source),
-                     pinned = COALESCE(?9, pinned)
+                     pinned = COALESCE(?9, pinned), status = 'active'
                  WHERE id = ?10",
                 (
                     content,

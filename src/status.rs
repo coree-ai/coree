@@ -43,7 +43,7 @@ pub async fn run(config: &Config) -> Result<()> {
 
     let last_stored: Option<String> = conn
         .query(
-            "SELECT created_at FROM memories WHERE project_id = ?1 ORDER BY created_at DESC LIMIT 1",
+            "SELECT created_at FROM memories WHERE status = 'active' AND project_id = ?1 ORDER BY created_at DESC LIMIT 1",
             (pid.clone(),),
         )
         .await?

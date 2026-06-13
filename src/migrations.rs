@@ -23,6 +23,10 @@ const MIGRATIONS: &[Migration] = &[
         name: "v003_drop_unused",
         sql: include_str!("migrations/v003_drop_unused.sql"),
     },
+    Migration {
+        name: "v004_active_topic_key",
+        sql: include_str!("migrations/v004_active_topic_key.sql"),
+    },
 ];
 
 pub async fn run(conn: &Connection) -> Result<()> {

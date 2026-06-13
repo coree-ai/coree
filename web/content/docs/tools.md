@@ -61,7 +61,7 @@ Lists stored memories, optionally filtered by type or tags.
 
 ### `delete_memories(ids)`
 
-Permanently removes memories by ID.
+Soft-deletes memories (recoverable). Marked as deleted but still present in the database; does not permanently remove data.
 
 ### `pin_memories(ids, pin)`
 
@@ -73,7 +73,7 @@ Lists memories that have not been accessed recently. Useful for reviewing the me
 
 ### `evict_stale_memories()`
 
-Removes stale memories. Use with care - this is permanent.
+Permanently purges all stale memories and their associated vectors. This is irreversible. Use `list_stale_memories()` first to review candidates.
 
 ---
 

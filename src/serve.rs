@@ -637,7 +637,7 @@ impl CoreeServer {
             .map_err(|e| tool_err(format!("remote_sync failed: {e}")))
     }
 
-    #[tool(description = "Delete one or more memories by ID.")]
+    #[tool(description = "Soft-delete one or more memories by ID. Marked deleted, recoverable until evicted.")]
     async fn delete_memories(
         &self,
         Parameters(input): Parameters<DeleteMemoriesInput>,
@@ -694,7 +694,7 @@ impl CoreeServer {
     }
 
     #[tool(
-        description = "Permanently delete all stale memories (not pinned, older than 7 days, retention score below threshold). Call list_stale_memories first to review candidates."
+        description = "Permanently purge all stale memories and their vectors. Irreversible. Call list_stale_memories first to review candidates."
     )]
     async fn evict_stale_memories(&self) -> Result<String, String> {
         let ready = self.try_ready()?;

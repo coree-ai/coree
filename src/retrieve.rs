@@ -318,7 +318,7 @@ pub async fn get_full_batch(
     let sql = format!(
         "SELECT id, project_id, type, title, content, facts, tags,
                 importance, access_count, pinned, status, created_at, updated_at
-         FROM memories WHERE id IN ({placeholders}) AND project_id = ?"
+         FROM memories WHERE id IN ({placeholders}) AND status = 'active' AND project_id = ?"
     );
     let select_params: Vec<Value> = ids
         .iter()
@@ -350,7 +350,7 @@ pub async fn get_full_batch(
     // Increment access count for all fetched memories in one query.
     let update_sql = format!(
         "UPDATE memories SET access_count = access_count + 1, last_accessed = ? \
-         WHERE id IN ({placeholders}) AND project_id = ?"
+         WHERE id IN ({placeholders}) AND status = 'active' AND project_id = ?"
     );
     let update_params: Vec<Value> = std::iter::once(Value::Text(Utc::now().to_rfc3339()))
         .chain(ids.iter().cloned().map(Value::Text))
@@ -617,7 +617,9 @@ pub async fn list_stale(conn: &Connection, project_id: &str) -> Result<Vec<Stale
     Ok(stale)
 }
 
-/// Hard-delete all stale memories (those returned by list_stale). Returns count deleted.
+/// Hard-delete all stale memories (those returned by list_stale) and their
+/// dependent rows (memory_vectors, raw_captures). Returns count of memories deleted.
+/// This is the ONLY place that permanently purges data - turso FK CASCADE is inert.
 pub async fn evict_stale(conn: &Connection, project_id: &str) -> Result<u64> {
     let candidates = list_stale(conn, project_id).await?;
     if candidates.is_empty() {
@@ -625,12 +627,20 @@ pub async fn evict_stale(conn: &Connection, project_id: &str) -> Result<u64> {
     }
     let ids: Vec<String> = candidates.into_iter().map(|m| m.id).collect();
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-    // Prepend project_id param; WHERE clause double-checks project scope for safety.
-    let sql = format!("DELETE FROM memories WHERE project_id = ?1 AND id IN ({placeholders})");
-    let params: Vec<Value> = std::iter::once(Value::Text(project_id.to_string()))
+
+    let sql_mv = format!("DELETE FROM memory_vectors WHERE memory_id IN ({placeholders})");
+    let params_mv: Vec<Value> = ids.iter().cloned().map(Value::Text).collect();
+    let _ = conn.execute(&sql_mv, params_from_iter(params_mv)).await;
+
+    let sql_rc = format!("DELETE FROM raw_captures WHERE id IN ({placeholders})");
+    let params_rc: Vec<Value> = ids.iter().cloned().map(Value::Text).collect();
+    let _ = conn.execute(&sql_rc, params_from_iter(params_rc)).await;
+
+    let sql_mem = format!("DELETE FROM memories WHERE project_id = ?1 AND id IN ({placeholders})");
+    let params_mem: Vec<Value> = std::iter::once(Value::Text(project_id.to_string()))
         .chain(ids.into_iter().map(Value::Text))
         .collect();
-    Ok(conn.execute(&sql, params_from_iter(params)).await?)
+    Ok(conn.execute(&sql_mem, params_from_iter(params_mem)).await?)
 }
 
 fn days_since(datetime_str: &str, now: &chrono::DateTime<Utc>) -> f64 {
