@@ -37,3 +37,4 @@ jobs:
           renovate-version: full
         env:
           LOG_LEVEL: info
+          RENOVATE_REPOSITORIES: coree-ai/${{ matrix.repo }}
