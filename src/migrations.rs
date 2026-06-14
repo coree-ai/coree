@@ -1,3 +1,24 @@
+//! Schema migrations for the memory database.
+//!
+//! Migrations run on every `coree serve` startup against the local (possibly
+//! replica) database. One remote database may be shared by several replicas —
+//! across projects and even across machines — that each migrate independently
+//! and sync the resulting frames. To stay correct under that concurrency, every
+//! migration MUST be additive and idempotent:
+//!
+//! - Create with `CREATE TABLE/INDEX IF NOT EXISTS`.
+//! - Add columns with `ALTER TABLE ... ADD COLUMN` guarded against the
+//!   `"duplicate column name"` error (see [`apply_v002`]).
+//! - Never emit unconditional seed-data `INSERT`s; use `INSERT OR IGNORE`, or
+//!   backfill with an idempotent `UPDATE ... WHERE` (see [`apply_v002`]).
+//! - Avoid destructive renames; prefer add-new + backfill so an older `coree`
+//!   binary sharing the schema keeps working (additive changes are
+//!   forward-compatible; a shared remote DB implies a shared schema version).
+//!
+//! Do NOT edit the SQL of a migration that has already shipped: [`validate_checksum`]
+//! hashes each migration's `sql` and warns on mismatch, and existing installs have
+//! already applied it. Add a new migration instead.
+
 use anyhow::Result;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
@@ -82,8 +103,15 @@ async fn apply(conn: &Connection, migration: &Migration) -> Result<()> {
 
     let checksum = sha256(migration.sql);
     let now = Utc::now().to_rfc3339();
+    // INSERT OR IGNORE, not plain INSERT: when several replicas share one remote
+    // database they each apply migrations against their own local replica and push
+    // the resulting frames. `name` is the PRIMARY KEY, so two replicas recording
+    // the same migration would otherwise collide on merge. Ignoring a duplicate is
+    // correct because the DDL above is idempotent — the row is pure bookkeeping.
+    // This is a code-only change; it does not alter any migration's `sql`, so the
+    // checksums validated in `validate_checksum` are unaffected.
     conn.execute(
-        "INSERT INTO schema_migrations (name, applied_at, checksum) VALUES (?1, ?2, ?3)",
+        "INSERT OR IGNORE INTO schema_migrations (name, applied_at, checksum) VALUES (?1, ?2, ?3)",
         (migration.name, now, checksum),
     )
     .await?;

@@ -58,6 +58,37 @@ async fn migrations_are_idempotent() {
     coree::migrations::run(&db.conn).await.unwrap();
 }
 
+// Each migration is recorded exactly once in schema_migrations, and re-running
+// migrations (or a duplicate row arriving from another replica via INSERT OR
+// IGNORE) never produces a duplicate bookkeeping row.
+#[tokio::test]
+async fn migrations_bookkeeping_has_no_duplicates() {
+    let db = setup().await;
+    coree::migrations::run(&db.conn).await.unwrap();
+
+    // Simulate a row syncing in from another replica: INSERT OR IGNORE of an
+    // already-present migration name must be a no-op, not an error.
+    db.conn
+        .execute(
+            "INSERT OR IGNORE INTO schema_migrations (name, applied_at, checksum) \
+             VALUES ('v001_initial', 'x', 'x')",
+            (),
+        )
+        .await
+        .unwrap();
+
+    let mut rows = db
+        .conn
+        .query(
+            "SELECT COUNT(*) FROM (SELECT name FROM schema_migrations GROUP BY name HAVING COUNT(*) > 1)",
+            (),
+        )
+        .await
+        .unwrap();
+    let dupes: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(dupes, 0, "schema_migrations must have no duplicate names");
+}
+
 // --- delete_batch ---
 
 #[tokio::test]
