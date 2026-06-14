@@ -13,7 +13,7 @@
 | Binary + npm packages | `0.15.0` | Matches `Cargo.toml` exactly |
 | Model package | `1.0.0` | Independent of binary. Only change when the bundled model changes. |
 
-The per-editor **plugin configs** (`@coree-ai/coree@<ver>` pins in the `claude`, `gemini`, `opencode`, etc. repos) are **not** bumped here. The `Release` workflow dispatches Renovate, which opens PRs to bump those pins automatically. See [step 3](#3-let-the-release-workflow-run).
+The per-editor **plugin configs** (`@coree-ai/coree@<ver>` pins in the `claude`, `gemini`, `opencode`, etc. repos) are **not** bumped here. The `Release` workflow calls `propagate.yml`, which bumps those pins, tags each plugin repo, and (for `opencode`) publishes to npm automatically. See [step 3](#3-let-the-release-workflow-run).
 
 ## Steps
 
@@ -54,9 +54,9 @@ Pushing the `v*` tag triggers the `Release` workflow:
 1. **Build jobs** (parallel): Linux x86_64, Linux aarch64, macOS aarch64, Windows x86_64 (~5-7 min)
 2. **publish-npm job** (after builds): runs `generate-npm-packages.mjs`, publishes the four platform packages, then the main `@coree-ai/coree` package last (with npm provenance)
 3. **build-web / deploy-web jobs**: rebuild and deploy the docs site
-4. **trigger-renovate job** (after npm publish): dispatches `renovate.yml`, which runs Renovate against the plugin repos (`antigravity`, `claude`, `codex`, `gemini`, `openclaw`, `opencode`, `zed`) and opens PRs to bump their stale `@coree-ai/coree` pins
+4. **propagate job** (after npm publish): calls `propagate.yml`, a matrix over the plugin repos (`antigravity`, `claude`, `codex`, `gemini`, `openclaw`, `opencode`, `zed`). For each it rewrites the `@coree-ai/coree` pin, syncs the plugin's own version on a major/minor bump, refreshes the lockfile, commits to `main`, and pushes a `v<plugin-version>` tag (which fires `opencode`'s `publish.yml`)
 
-Total: ~12-15 minutes plus Renovate PR creation time.
+Total: ~12-15 minutes plus propagation time.
 
 ### 4. Verify the release
 
@@ -66,15 +66,22 @@ npm view @coree-ai/coree version
 npm view @coree-ai/coree-linux-x64 version
 ```
 
-### 5. Merge the Renovate PRs
+### 5. Verify plugin propagation
 
-Review and merge the pin-bump PRs Renovate opens in the plugin repos.
+The `propagate` job bumps the plugin repos directly (no PRs to merge). Spot-check:
+
+```bash
+gh api repos/coree-ai/opencode/git/refs/tags/v0.15.0 --jq .ref   # tag exists
+npm view @coree-ai/opencode version                              # opencode published
+```
+
+If a plugin repo's `main` has branch protection, `coree-release-bot` must be on the bypass list or the propagation push is rejected.
 
 ---
 
 ## Plugin pin propagation
 
-Plugin repos pin a specific coree binary version (`@coree-ai/coree@<ver>`). These pins are bumped by **Renovate**, dispatched automatically by the `Release` workflow — there is no manual plugin-config step in this repo. The plugin version scheme (`<coree-major>.<coree-minor>.<plugin-patch>`) is handled in each plugin repo's Renovate `postUpgradeTasks`.
+Plugin repos pin a specific coree binary version (`@coree-ai/coree@<ver>`). These pins are bumped by **`propagate.yml`** (called by the `Release` workflow after npm publish) — there is no manual plugin-config step. The shared script `scripts/propagate-coree-pin.mjs` rewrites the pin wherever it appears (generic, no per-repo config) and syncs each plugin's own version to `<coree-major>.<coree-minor>.0` on a major/minor coree bump; the workflow commits and pushes a `v<plugin-version>` tag using the `coree-release-bot` app token (the app-token push is what triggers `opencode`'s `publish.yml` — a `GITHUB_TOKEN` push would not). Only `opencode` is an npm package; the other 6 repos are git/marketplace-distributed, so their commit + tag is the release artifact. The `coree-version-check` reusable workflow guards that pin major.minor == plugin major.minor.
 
 ---
 
