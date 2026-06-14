@@ -180,7 +180,7 @@ pub async fn search(
     let tokens: Vec<String> = query
         .split_whitespace()
         .filter(|t| !t.is_empty())
-        .map(|t| like_escape(t))
+        .map(like_escape)
         .collect();
     if !tokens.is_empty() {
         let t = std::time::Instant::now();
