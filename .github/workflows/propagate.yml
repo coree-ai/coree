@@ -1,0 +1,95 @@
+name: Propagate coree pin
+
+# Propagates a published @coree-ai/coree version into the plugin wrapper repos:
+# rewrites the pin, syncs each plugin's own version on a major/minor bump,
+# refreshes the lockfile, then commits and pushes a `v<plugin-version>` tag.
+# The tag push (made with the COREE_BOT app token, not GITHUB_TOKEN) fires
+# each repo's publish.yml. Replaces the former Renovate-based propagation.
+
+on:
+  workflow_call:
+    inputs:
+      coree_version:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      coree_version:
+        description: 'coree version to propagate (e.g. 0.15.0)'
+        required: true
+        type: string
+
+jobs:
+  propagate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        repo:
+          - antigravity
+          - claude
+          - codex
+          - gemini
+          - openclaw
+          - opencode
+          - zed
+    steps:
+      - name: Get app token
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ vars.COREE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.COREE_BOT_PRIVATE_KEY }}
+          owner: coree-ai
+          repositories: ${{ matrix.repo }}
+
+      - name: Checkout propagation script (coree)
+        uses: actions/checkout@v6
+        with:
+          path: _tool
+          sparse-checkout: scripts/propagate-coree-pin.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout target repo
+        uses: actions/checkout@v6
+        with:
+          repository: coree-ai/${{ matrix.repo }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: repo
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Rewrite pin + sync plugin version
+        id: bump
+        working-directory: repo
+        run: node ../_tool/scripts/propagate-coree-pin.mjs "${{ inputs.coree_version }}"
+
+      - name: Refresh lockfile + validate build
+        if: steps.bump.outputs.changed == 'true'
+        working-directory: repo
+        run: |
+          npm install
+          npm run typecheck --if-present
+          npm run build --if-present
+
+      - name: Commit, tag, push
+        if: steps.bump.outputs.changed == 'true'
+        working-directory: repo
+        env:
+          PLUGIN_VERSION: ${{ steps.bump.outputs.plugin_version }}
+          COREE_VERSION: ${{ inputs.coree_version }}
+        run: |
+          git config user.name "coree-release-bot[bot]"
+          git config user.email "coree-release-bot[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: bump to coree ${COREE_VERSION} (v${PLUGIN_VERSION})"
+          if git rev-parse "v${PLUGIN_VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${PLUGIN_VERSION} already exists; pushing commit only."
+            git push origin HEAD:main
+          else
+            git tag "v${PLUGIN_VERSION}"
+            git push origin HEAD:main
+            git push origin "v${PLUGIN_VERSION}"
+          fi
