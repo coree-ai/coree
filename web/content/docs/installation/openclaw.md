@@ -25,7 +25,7 @@ OpenClaw uses `mcp.servers` (not `mcpServers`). Add to your project's `openclaw.
     "servers": {
       "coree": {
         "command": "npx",
-        "args": ["--yes", "@coree-ai/coree@0.14.1", "serve"],
+        "args": ["--yes", "@coree-ai/coree@0.15.0", "serve"],
         "env": {
           "COREE__MEMORY__REMOTE_AUTH_TOKEN": "${COREE__MEMORY__REMOTE_AUTH_TOKEN}",
           "COREE__MEMORY__REMOTE_URL": "${COREE__MEMORY__REMOTE_URL}"

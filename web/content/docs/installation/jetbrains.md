@@ -15,7 +15,7 @@ JetBrains AI Assistant supports MCP servers from IntelliJ IDEA 2025.1+ (AI Assis
 4. Enter:
    - **Name**: `coree`
    - **Command**: `npx`
-   - **Arguments**: `--yes @coree-ai/coree@0.14.1 serve`
+   - **Arguments**: `--yes @coree-ai/coree@0.15.0 serve`
 5. Click **OK** and restart the IDE.
 
 ## Install via config file
@@ -44,7 +44,7 @@ The config:
   "mcpServers": {
     "coree": {
       "command": "npx",
-      "args": ["--yes", "@coree-ai/coree@0.14.1", "serve"],
+      "args": ["--yes", "@coree-ai/coree@0.15.0", "serve"],
       "env": {
         "COREE__MEMORY__REMOTE_AUTH_TOKEN": "${COREE__MEMORY__REMOTE_AUTH_TOKEN}",
         "COREE__MEMORY__REMOTE_URL": "${COREE__MEMORY__REMOTE_URL}"

@@ -18,7 +18,7 @@ Edit `~/.config/opencode/opencode.json` (global) or `opencode.json` in your proj
   "mcp": {
     "coree": {
       "type": "local",
-      "command": ["npx", "--yes", "@coree-ai/coree@0.14.1", "serve"],
+      "command": ["npx", "--yes", "@coree-ai/coree@0.15.0", "serve"],
       "environment": {
         "COREE__MEMORY__REMOTE_AUTH_TOKEN": "{env:COREE__MEMORY__REMOTE_AUTH_TOKEN}",
         "COREE__MEMORY__REMOTE_URL": "{env:COREE__MEMORY__REMOTE_URL}",
