@@ -38,3 +38,5 @@ jobs:
         env:
           LOG_LEVEL: info
           RENOVATE_REPOSITORIES: coree-ai/${{ matrix.repo }}
+          # Allow the postUpgradeTasks command (lockfile + plugin own-version regen)
+          RENOVATE_ALLOWED_COMMANDS: '["^node scripts/renovate-post-upgrade\\.mjs .+$"]'
