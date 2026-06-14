@@ -1,60 +1,46 @@
 +++
 title = "opencode"
-description = "Add coree to opencode as an MCP server."
+description = "Add coree to opencode with the official plugin."
 weight = 35
 template = "page.html"
 +++
 
-opencode does not have a distributable MCP plugin format. Installation requires two manual steps.
+coree ships an official opencode plugin. Installing it sets up the MCP server **and** the lifecycle hooks in one step.
 
 ## Install
 
-### Step 1 - MCP server
+```bash
+opencode plugin @coree-ai/opencode
+```
 
-Edit `~/.config/opencode/opencode.json` (global) or `opencode.json` in your project root (project-scoped), and add the coree server:
+This downloads the plugin and adds it to your opencode config (`~/.config/opencode/opencode.json` on Linux by default):
 
 ```json
 {
-  "mcp": {
-    "coree": {
-      "type": "local",
-      "command": ["npx", "--yes", "@coree-ai/coree@0.15.0", "serve"],
-      "environment": {
-        "COREE__MEMORY__REMOTE_AUTH_TOKEN": "{env:COREE__MEMORY__REMOTE_AUTH_TOKEN}",
-        "COREE__MEMORY__REMOTE_URL": "{env:COREE__MEMORY__REMOTE_URL}",
-        "COREE__INDEX__REMOTE_AUTH_TOKEN": "{env:COREE__INDEX__REMOTE_AUTH_TOKEN}",
-        "COREE__INDEX__REMOTE_URL": "{env:COREE__INDEX__REMOTE_URL}"
-      },
-      "enabled": true,
-      "timeout": 120000
-    }
-  }
+  "plugin": [
+    "@coree-ai/opencode"
+  ]
 }
 ```
 
-Notes on the format:
-- `command` is an array combining the executable and arguments (unlike the separate `command`/`args` used by other tools)
-- `{env:VAR}` forwards the named variable from your shell environment; unset variables are passed as empty strings
-- `timeout` is in milliseconds (120 000 ms = 2 minutes, needed for first-run model download)
+That single entry registers the coree MCP server and wires up context injection - no separate MCP block to maintain.
 
-### Step 2 - Context file
+## Hooks
 
-Copy `opencode.md` to your project root so the agent loads coree usage instructions:
+The plugin injects relevant memories on session start and live memory/code suggestions on every prompt via opencode's `chat.message` hook, and re-injects context after the conversation is compacted. No configuration required.
+
+## Agent instructions (optional)
+
+For explicit usage guidance, add `opencode.md` to your project root (or `~/.config/opencode/AGENTS.md` for all projects):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/coree-ai/opencode/main/opencode.md \
   -o opencode.md
 ```
 
-opencode loads `opencode.md` from the project root as agent instructions. For a global context file that applies to all projects, add it to `~/.config/opencode/AGENTS.md` instead.
-
-## Hooks
-
-opencode does not expose lifecycle hooks for MCP integrations. Context injection is driven by the agent following the instructions in `opencode.md`.
-
 ## Verify
 
-After configuration, start an opencode session and run:
+Start an opencode session and run:
 
 ```
 call the diagnose tool
