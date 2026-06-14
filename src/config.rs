@@ -214,7 +214,32 @@ impl Config {
         } else {
             validate_project_root(cfg.project_root.as_deref().unwrap())?;
         }
+        cfg.normalize_index_storage();
         Ok(cfg)
+    }
+
+    /// The code index is a rebuildable, per-checkout, write-heavy derivative of the
+    /// working tree; `project_id` is not a meaningful discriminator for code, so it
+    /// must never be shared via a remote database. Remote storage is also not
+    /// implemented for the index — it is always opened as a local file — so a remote
+    /// configuration would be silently ignored. Coerce any remote index storage to
+    /// managed-local and warn, leaving the memory storage untouched.
+    fn normalize_index_storage(&mut self) {
+        let s = &self.index.storage;
+        let configured_remote = s.mode == StorageMode::Remote
+            || s.remote_url.is_some()
+            || s.remote_auth_token.is_some();
+        if configured_remote {
+            eprintln!(
+                "[coree] Remote/shared storage is not supported for the code index \
+                 (it is rebuildable per-checkout); using managed-local storage for the \
+                 index instead. Memory storage is unaffected."
+            );
+            self.index.storage.mode = StorageMode::Managed;
+            self.index.storage.remote_mode = RemoteMode::default();
+            self.index.storage.remote_url = None;
+            self.index.storage.remote_auth_token = None;
+        }
     }
 
     /// Resolved DB path for the current memory storage mode.
@@ -430,6 +455,64 @@ mod tests {
         assert!(path.ends_with("memory.db"));
         assert!(path.to_string_lossy().contains("coree"));
         assert!(path.to_string_lossy().contains("-some-project"));
+    }
+
+    #[test]
+    fn normalize_index_storage_coerces_remote_to_managed() {
+        let mut cfg = Config {
+            project_root: Some(PathBuf::from("/some/project")),
+            index: IndexConfig {
+                storage: StorageConfig {
+                    mode: StorageMode::Remote,
+                    remote_url: Some("libsql://shared.turso.io".to_string()),
+                    remote_auth_token: Some("secret".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            // Memory remote config must survive normalization untouched.
+            memory: MemoryConfig {
+                storage: StorageConfig {
+                    mode: StorageMode::Remote,
+                    remote_url: Some("libsql://mem.turso.io".to_string()),
+                    ..Default::default()
+                },
+            },
+            ..Default::default()
+        };
+        cfg.normalize_index_storage();
+
+        assert_eq!(cfg.index.storage.mode, StorageMode::Managed);
+        assert!(cfg.index.storage.remote_url.is_none());
+        assert!(cfg.index.storage.remote_auth_token.is_none());
+        // index_db_path is a local managed path, never remote.
+        assert!(cfg.index_db_path().ends_with("index.db"));
+
+        // Memory storage is untouched.
+        assert_eq!(cfg.memory.storage.mode, StorageMode::Remote);
+        assert_eq!(
+            cfg.memory.storage.remote_url.as_deref(),
+            Some("libsql://mem.turso.io")
+        );
+    }
+
+    #[test]
+    fn normalize_index_storage_leaves_managed_and_disabled() {
+        for mode in [StorageMode::Managed, StorageMode::Local, StorageMode::Disabled] {
+            let mut cfg = Config {
+                project_root: Some(PathBuf::from("/some/project")),
+                index: IndexConfig {
+                    storage: StorageConfig {
+                        mode: mode.clone(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            cfg.normalize_index_storage();
+            assert_eq!(cfg.index.storage.mode, mode);
+        }
     }
 
     #[test]

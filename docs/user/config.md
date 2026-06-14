@@ -128,7 +128,9 @@ Controls the code intelligence index.
 mode = "managed"  # default
 ```
 
-Accepts the same values as `memory.mode`. Use `disabled` to turn off code indexing entirely.
+Accepts `managed` (default), `local`, or `disabled`. Use `disabled` to turn off code indexing entirely.
+
+`remote` is **not supported** for the index and must not be shared across projects: the code index is a rebuildable, per-checkout derivative of the working tree, so `project_id` is not a meaningful discriminator for it. A `remote` index configuration (including `COREE__INDEX__REMOTE_URL` / `COREE__INDEX__REMOTE_AUTH_TOKEN`) is coerced to `managed` with a warning. Memory storage is unaffected and may be `remote`.
 
 #### `git_history`
 
