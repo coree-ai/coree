@@ -25,6 +25,9 @@
     }
   },
   "hooks": {
-    "after:bump": "node scripts/bump-web-docs.mjs ${version}"
+    "after:bump": [
+      "node scripts/bump-web-docs.mjs ${version}",
+      "cargo update -p coree --offline"
+    ]
   }
 }
