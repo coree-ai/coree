@@ -30,6 +30,24 @@ you retain ownership of your contribution.
 - No docstrings or comments on unchanged code
 - Error handling via `anyhow` for application code
 
+## Database migrations
+
+One remote database may be shared by several replicas — across projects and even
+across machines — that each migrate independently and sync the result. Every new
+migration in `src/migrations.rs` MUST be additive and idempotent:
+
+- Create with `CREATE TABLE/INDEX IF NOT EXISTS`.
+- Add columns with `ALTER TABLE ... ADD COLUMN` guarded against the
+  `"duplicate column name"` error (see `apply_v002`).
+- Never emit unconditional seed-data `INSERT`s; use `INSERT OR IGNORE` or an
+  idempotent `UPDATE ... WHERE` backfill.
+- Avoid destructive renames; prefer add-new + backfill so an older `coree`
+  binary sharing the schema keeps working. A shared remote DB implies a shared
+  schema version, so schema changes must stay forward-compatible.
+
+Never edit the SQL of a migration that has already shipped — checksums are
+validated and existing installs have already applied it. Add a new migration.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the
