@@ -40,5 +40,8 @@ jobs:
           # diagnose at info level (customManager extraction, postUpgradeTasks).
           LOG_LEVEL: debug
           RENOVATE_REPOSITORIES: coree-ai/${{ matrix.repo }}
+          # TEMPORARY: recreate the coree-pin PRs that were closed during setup.
+          # Remove once the 0.15.0 pin PRs are open in all repos.
+          RENOVATE_RECREATE_WHEN: always
           # Allow the postUpgradeTasks command (lockfile + plugin own-version regen)
           RENOVATE_ALLOWED_COMMANDS: '["^node scripts/renovate-post-upgrade\\.mjs .+$"]'
