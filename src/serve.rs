@@ -17,9 +17,10 @@ use rmcp::{
     transport::stdio,
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, PickFirst, json::JsonString, serde_as};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 use turso::Connection;
 use uuid::Uuid;
@@ -28,7 +29,7 @@ use crate::{
     config::{Config, RemoteMode, StorageMode},
     db::{self, Db},
     embed::Embedder,
-    index, migrations, project_id, remote, retrieve,
+    index, migrations, project_id, remote, request, retrieve,
     store::{self, WriteLock},
 };
 
@@ -63,6 +64,11 @@ struct CoreeServer {
     session_id: String,
     project_id: String,
     config: Arc<Config>,
+    /// True once this process has acquired serve.lock and owns the database.
+    /// While false, this is a secondary process: tool calls are forwarded to the
+    /// primary over the local socket instead of being served from a local DB
+    /// (which a secondary never opens).
+    is_primary: Arc<AtomicBool>,
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
     #[allow(dead_code)]
@@ -83,6 +89,37 @@ impl CoreeServer {
             DbState::Failed(msg) => Err(format!(
                 "coree database initialisation failed: {msg} — call the `diagnose` tool for remediation steps."
             )),
+        }
+    }
+
+    /// If this process is a secondary (has not acquired serve.lock), forward the
+    /// tool call to the primary over the local socket and return its result.
+    /// Returns `None` when this process is the primary (handle locally) or when the
+    /// primary is unreachable — in the latter case the caller falls through to local
+    /// handling, which surfaces the `try_ready()` syncing state until this process
+    /// is itself promoted to primary.
+    ///
+    /// `input` is re-serialized to the same JSON argument object the MCP client sent;
+    /// the primary re-deserializes it with the identical serde_as rules, so values
+    /// round-trip. Pass `None` for tools that take no arguments.
+    async fn maybe_proxy<T: Serialize>(
+        &self,
+        tool: &str,
+        input: Option<&T>,
+    ) -> Option<Result<String, String>> {
+        if self.is_primary.load(Ordering::SeqCst) {
+            return None;
+        }
+        let args = match input {
+            Some(v) => match serde_json::to_string(v) {
+                Ok(s) => Some(s),
+                Err(e) => return Some(Err(tool_err(format!("proxy serialize failed: {e}")))),
+            },
+            None => None,
+        };
+        match request::call_tool_on_server(&self.config, tool, args.as_deref()).await {
+            Ok(Some(text)) => Some(Ok(text)),
+            _ => None,
         }
     }
 
@@ -108,7 +145,7 @@ impl CoreeServer {
 // back to parsing from a string, accepting both forms transparently.
 
 #[serde_as]
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct StoreMemoryInput {
     /// Full text of the memory to store.
     content: String,
@@ -153,7 +190,7 @@ struct StoreMemoryInput {
 }
 
 #[serde_as]
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct SearchMemoryInput {
     /// Natural language search query.
     query: String,
@@ -172,7 +209,7 @@ struct SearchMemoryInput {
 }
 
 #[serde_as]
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct GetMemoriesInput {
     /// IDs of memories to fetch in full.
     // Claude Code MCP client sends arrays as JSON-encoded strings - see comment above.
@@ -182,7 +219,7 @@ struct GetMemoriesInput {
 }
 
 #[serde_as]
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct StoreMemoriesInput {
     /// Array of memories to store. Each follows the same schema as a single store call.
     // Claude Code MCP client sends arrays as JSON-encoded strings - see comment above.
@@ -192,7 +229,7 @@ struct StoreMemoriesInput {
 }
 
 #[serde_as]
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct DeleteMemoriesInput {
     /// IDs of memories to delete.
     // Claude Code MCP client sends arrays as JSON-encoded strings - see comment above.
@@ -202,7 +239,7 @@ struct DeleteMemoriesInput {
 }
 
 #[serde_as]
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct ListMemoriesInput {
     /// Project scope. Omit to use the server's configured project_id.
     #[serde(default)]
@@ -228,7 +265,7 @@ struct ListMemoriesInput {
 }
 
 #[serde_as]
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct PinMemoriesInput {
     /// IDs of memories to pin or unpin.
     // Claude Code MCP client sends arrays as JSON-encoded strings - see comment above.
@@ -245,7 +282,7 @@ struct PinMemoriesInput {
 // --- Code intelligence tool input schemas ---
 
 #[serde_as]
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct SearchCodeInput {
     /// Natural language query describing the code you are looking for.
     query: String,
@@ -256,7 +293,7 @@ struct SearchCodeInput {
     limit: Option<usize>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct GetSymbolInput {
     /// Symbol name or qualified path to look up (e.g. "validate_jwt_token" or "Auth::validate").
     name: String,
@@ -266,7 +303,7 @@ struct GetSymbolInput {
 }
 
 #[serde_as]
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct SearchInput {
     /// Natural language query to search across memories and source code simultaneously.
     query: String,
@@ -277,14 +314,14 @@ struct SearchInput {
     limit: Option<usize>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct SeedCloudInput {
     /// Overwrite remote database even if it already has data.
     #[serde(default)]
     force: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct MigrateToTursoInput {
     /// Turso database URL (e.g. libsql://mydb-org.turso.io). Leave empty to be prompted interactively.
     #[serde(default)]
@@ -337,6 +374,9 @@ impl CoreeServer {
         &self,
         Parameters(input): Parameters<StoreMemoriesInput>,
     ) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy("store_memories", Some(&input)).await {
+            return r;
+        }
         let ready = self.try_ready()?;
         if input.memories.is_empty() {
             return Ok("No memories provided.".to_string());
@@ -404,6 +444,9 @@ impl CoreeServer {
         &self,
         Parameters(input): Parameters<SearchMemoryInput>,
     ) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy("search_memory", Some(&input)).await {
+            return r;
+        }
         let ready = self.try_ready()?;
         let project = input.project_id.unwrap_or_else(|| self.project_id.clone());
         let limit = input.limit.unwrap_or(5);
@@ -445,6 +488,9 @@ impl CoreeServer {
         &self,
         Parameters(input): Parameters<GetMemoriesInput>,
     ) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy("get_memories", Some(&input)).await {
+            return r;
+        }
         let ready = self.try_ready()?;
         if input.ids.is_empty() {
             return Ok("No IDs provided.".to_string());
@@ -557,6 +603,9 @@ impl CoreeServer {
         &self,
         Parameters(input): Parameters<ListMemoriesInput>,
     ) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy("list_memories", Some(&input)).await {
+            return r;
+        }
         let ready = self.try_ready()?;
         let project = input.project_id.unwrap_or_else(|| self.project_id.clone());
         let limit = input.limit.unwrap_or(20);
@@ -589,6 +638,9 @@ impl CoreeServer {
         &self,
         Parameters(input): Parameters<PinMemoriesInput>,
     ) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy("pin_memories", Some(&input)).await {
+            return r;
+        }
         let ready = self.try_ready()?;
         if input.ids.is_empty() {
             return Ok("No IDs provided.".to_string());
@@ -614,6 +666,9 @@ impl CoreeServer {
         &self,
         Parameters(input): Parameters<SeedCloudInput>,
     ) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy("remote_sync", Some(&input)).await {
+            return r;
+        }
         remote::sync(&self.config, input.force.unwrap_or(false))
             .await
             .map_err(|e| tool_err(format!("remote_sync failed: {e}")))
@@ -624,6 +679,9 @@ impl CoreeServer {
         &self,
         Parameters(input): Parameters<DeleteMemoriesInput>,
     ) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy("delete_memories", Some(&input)).await {
+            return r;
+        }
         let ready = self.try_ready()?;
         if input.ids.is_empty() {
             return Ok("No IDs provided.".to_string());
@@ -645,6 +703,9 @@ impl CoreeServer {
         description = "List memories eligible for eviction: not pinned, older than 7 days, retention score below threshold. Call before evict_stale_memories to review candidates."
     )]
     async fn list_stale_memories(&self) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy::<()>("list_stale_memories", None).await {
+            return r;
+        }
         let ready = self.try_ready()?;
         match retrieve::list_stale(&ready.conn, &self.project_id).await {
             Ok(stale) if stale.is_empty() => Ok("No stale memories found.".to_string()),
@@ -668,6 +729,9 @@ impl CoreeServer {
         Returns a 'loading' message if the database is not yet ready — wait a few seconds and retry."
     )]
     async fn session_context(&self) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy::<()>("session_context", None).await {
+            return r;
+        }
         let ready = self.try_ready()?;
         crate::inject::build_tool_session_content(&ready.conn, &self.project_id)
             .await
@@ -678,6 +742,9 @@ impl CoreeServer {
         description = "Permanently purge all stale memories and their vectors. Irreversible. Call list_stale_memories first to review candidates."
     )]
     async fn evict_stale_memories(&self) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy::<()>("evict_stale_memories", None).await {
+            return r;
+        }
         let ready = self.try_ready()?;
         match retrieve::evict_stale(&ready.conn, &self.project_id).await {
             Ok(0) => Ok("No stale memories to evict.".to_string()),
@@ -799,6 +866,9 @@ impl CoreeServer {
         &self,
         Parameters(input): Parameters<SearchCodeInput>,
     ) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy("search_code", Some(&input)).await {
+            return r;
+        }
         let db_ready = self.try_ready()?;
         let idx = self.try_index_ready()?;
         let limit = input.limit.unwrap_or(10);
@@ -842,6 +912,9 @@ impl CoreeServer {
         &self,
         Parameters(input): Parameters<GetSymbolInput>,
     ) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy("get_symbol", Some(&input)).await {
+            return r;
+        }
         let idx = self.try_index_ready()?;
         let results = index::search::get_symbol(&idx.conn, &input.name, input.file_path.as_deref())
             .await
@@ -954,6 +1027,9 @@ impl CoreeServer {
         description = "Search memories, source code, and git history simultaneously. Use this by default. Returns memory results and code results in separate sections."
     )]
     async fn search(&self, Parameters(input): Parameters<SearchInput>) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy("search", Some(&input)).await {
+            return r;
+        }
         let t_search = std::time::Instant::now();
         let db_ready = self.try_ready()?;
         let limit = input.limit.unwrap_or(5);
@@ -1256,6 +1332,10 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     let session_id = Uuid::new_v4().to_string();
     mlog!("coree: session {session_id}, project \"{project_id}\"");
 
+    // Flipped to true by the background task once this process wins serve.lock.
+    // Until then this is a secondary and tool handlers proxy to the primary.
+    let is_primary = Arc::new(AtomicBool::new(false));
+
     let server = CoreeServer {
         db: db_rx,
         idx: idx_rx,
@@ -1263,6 +1343,7 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
         session_id,
         project_id: project_id.clone(),
         config: Arc::new(config.clone()),
+        is_primary: Arc::clone(&is_primary),
         tool_router: CoreeServer::tool_router(),
         prompt_router: CoreeServer::prompt_router(),
     };
@@ -1278,7 +1359,6 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     let idx_tx_clone = idx_tx.clone();
     let server_for_socket = server.clone();
     let ready_file_bg = ready_file.clone();
-    let is_primary = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let is_primary_bg = Arc::clone(&is_primary);
 
     let lock_file_path_bg = lock_file_path.clone();
@@ -1688,4 +1768,64 @@ fn format_full_memory(m: &retrieve::FullMemory) -> String {
         content = m.content,
         facts = facts_str,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // maybe_proxy serializes the typed tool input and the primary re-deserializes it
+    // with the same serde_as rules. These structs use serde_as deserialize helpers
+    // (PickFirst/JsonString/DisplayFromStr) that accept both native and string forms;
+    // this asserts the Serialize side produces output the Deserialize side accepts, so
+    // arguments round-trip across the proxy hop without loss.
+    fn roundtrip<T>(value: &T) -> T
+    where
+        T: Serialize + for<'de> Deserialize<'de>,
+    {
+        let json = serde_json::to_string(value).expect("serialize");
+        serde_json::from_str(&json).expect("deserialize")
+    }
+
+    #[test]
+    fn store_memories_input_roundtrips() {
+        let input = StoreMemoriesInput {
+            memories: vec![StoreMemoryInput {
+                content: "c".to_string(),
+                memory_type: "decision".to_string(),
+                title: "t".to_string(),
+                topic_key: Some("k".to_string()),
+                facts: vec!["f1".to_string(), "f2".to_string()],
+                tags: vec!["tag".to_string()],
+                importance: Some(0.9),
+                source: Some("reviewed".to_string()),
+                pinned: Some(true),
+                project_id: Some("p".to_string()),
+            }],
+        };
+        let out = roundtrip(&input);
+        assert_eq!(out.memories.len(), 1);
+        let m = &out.memories[0];
+        assert_eq!(m.facts, vec!["f1".to_string(), "f2".to_string()]);
+        assert_eq!(m.tags, vec!["tag".to_string()]);
+        assert_eq!(m.importance, Some(0.9));
+        assert_eq!(m.pinned, Some(true));
+    }
+
+    #[test]
+    fn pin_and_search_inputs_roundtrip() {
+        let pin = PinMemoriesInput {
+            ids: vec!["a".to_string(), "b".to_string()],
+            pin: true,
+        };
+        let out = roundtrip(&pin);
+        assert_eq!(out.ids.len(), 2);
+        assert!(out.pin);
+
+        let search = SearchInput {
+            query: "q".to_string(),
+            limit: Some(7),
+        };
+        assert_eq!(roundtrip(&search).limit, Some(7));
+    }
 }
