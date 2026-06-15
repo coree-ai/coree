@@ -1676,25 +1676,31 @@ async fn serve_inner(config: Config, project_id: String, force_reindex: bool) ->
                                             "coree: index logic version bump detected, triggering full rebuild"
                                         );
                                     }
-                                    match index::indexer::clear_all_tables(&indexer_conn).await {
-                                        Ok(()) => mlog!("coree: index tables cleared for rebuild"),
-                                        Err(e) => mlog!(
-                                            "coree: failed to clear index tables: {e:#}"
-                                        ),
-                                    }
-                                    match index::set_stored_logic_version(
-                                        &indexer_conn,
-                                        index::INDEX_LOGIC_VERSION,
-                                    )
-                                    .await
-                                    {
-                                        Ok(()) => mlog!(
-                                            "coree: index logic version set to {}",
-                                            index::INDEX_LOGIC_VERSION
-                                        ),
-                                        Err(e) => mlog!(
-                                            "coree: failed to store index logic version: {e:#}"
-                                        ),
+                                    let clear_ok = match index::indexer::clear_all_tables(&indexer_conn).await {
+                                        Ok(()) => {
+                                            mlog!("coree: index tables cleared for rebuild");
+                                            true
+                                        },
+                                        Err(e) => {
+                                            mlog!("coree: failed to clear index tables: {e:#}");
+                                            false
+                                        },
+                                    };
+                                    if clear_ok {
+                                        match index::set_stored_logic_version(
+                                            &indexer_conn,
+                                            index::INDEX_LOGIC_VERSION,
+                                        )
+                                        .await
+                                        {
+                                            Ok(()) => mlog!(
+                                                "coree: index logic version set to {}",
+                                                index::INDEX_LOGIC_VERSION
+                                            ),
+                                            Err(e) => mlog!(
+                                                "coree: failed to store index logic version: {e:#}"
+                                            ),
+                                        }
                                     }
                                 }
 

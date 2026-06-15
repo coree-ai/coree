@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 
 use crate::embed::Embedder;
 
-pub const INDEX_LOGIC_VERSION: u32 = 1;
+pub const INDEX_LOGIC_VERSION: u32 = 2;
 
 pub struct IndexReady {
     /// Read connection for search queries. Never shared with write tasks.

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -138,15 +139,31 @@ pub async fn run(
     Ok(result)
 }
 
-/// Collect all indexable files under `root`, respecting .gitignore and built-in excludes.
-fn collect_files(root: &Path, extra_excludes: &[String]) -> Result<Vec<(PathBuf, Lang)>> {
-    let mut files = Vec::new();
+/// Discover all git repository roots under `project_root`.
+///
+/// Walks without gitignore to find repos hidden by parent `.gitignore` rules
+/// (e.g. an outer workspace `.gitignore` of `*` that prunes a nested source
+/// tree). Always includes `project_root` itself as a walk root so single-repo
+/// projects and loose files in non-git workspaces are still indexed.
+fn discover_repo_roots(project_root: &Path) -> Result<Vec<PathBuf>> {
+    let mut roots: HashSet<PathBuf> = HashSet::new();
+    roots.insert(project_root.to_path_buf());
 
-    let walker = ignore::WalkBuilder::new(root)
-        .hidden(false) // still respects .gitignore
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
+    let walker = ignore::WalkBuilder::new(project_root)
+        .hidden(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .filter_entry(|entry| {
+            let name = entry.file_name().to_string_lossy();
+            if name == ".git" {
+                return false;
+            }
+            if ALWAYS_EXCLUDE.iter().any(|e| *e == name.as_ref()) {
+                return false;
+            }
+            true
+        })
         .build();
 
     for entry in walker {
@@ -154,26 +171,67 @@ fn collect_files(root: &Path, extra_excludes: &[String]) -> Result<Vec<(PathBuf,
             Ok(e) => e,
             Err(_) => continue,
         };
-        let path = entry.path();
-        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+        if !entry.file_type().is_some_and(|ft| ft.is_dir()) {
             continue;
         }
-        if is_excluded(path) {
-            continue;
+        if entry.path().join(".git").exists() {
+            roots.insert(entry.path().to_path_buf());
         }
+    }
 
-        // Check user-configured extra excludes
-        if !extra_excludes.is_empty() {
-            let rel = path.strip_prefix(root).unwrap_or(path);
-            let rel_str = rel.to_string_lossy();
-            if extra_excludes.iter().any(|pat| glob_match(pat, &rel_str)) {
+    Ok(roots.into_iter().collect())
+}
+
+/// Collect all indexable files under `root`, respecting each repo's own
+/// `.gitignore` and built-in excludes.
+///
+/// Uses per-repo walks (Option A): discovers every git repo under `root`,
+/// walks each with `git_ignore(true)` scoped to that repo, and deduplicates
+/// paths across overlapping walks. This fixes the nested-repo data-loss bug
+/// (#71) where an outer `.gitignore` of `*` pruned the entire nested source
+/// tree when walking only from the project root.
+fn collect_files(root: &Path, extra_excludes: &[String]) -> Result<Vec<(PathBuf, Lang)>> {
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut files = Vec::new();
+
+    let repo_roots = discover_repo_roots(root)?;
+
+    for repo_root in &repo_roots {
+        let walker = ignore::WalkBuilder::new(repo_root)
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .build();
+
+        for entry in walker {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                 continue;
             }
-        }
+            if !seen.insert(path.to_path_buf()) {
+                continue;
+            }
+            if is_excluded(path) {
+                continue;
+            }
 
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if let Some(lang) = Lang::from_extension(ext) {
-            files.push((path.to_path_buf(), lang));
+            if !extra_excludes.is_empty() {
+                let rel = path.strip_prefix(root).unwrap_or(path);
+                let rel_str = rel.to_string_lossy();
+                if extra_excludes.iter().any(|pat| glob_match(pat, &rel_str)) {
+                    continue;
+                }
+            }
+
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if let Some(lang) = Lang::from_extension(ext) {
+                files.push((path.to_path_buf(), lang));
+            }
         }
     }
 
@@ -578,5 +636,96 @@ mod tests {
         // "vendor/**" must not match a file whose path starts with "vendor" but
         // is a different directory (e.g. "vendor_utils/foo.rs")
         assert!(!glob_match("vendor/**", "vendor_utils/foo.rs"));
+    }
+
+    // --- discover_repo_roots ---
+
+    #[test]
+    fn discover_roots_single_repo() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+
+        let roots = super::discover_repo_roots(dir.path()).unwrap();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(&roots[0], dir.path());
+    }
+
+    #[test]
+    fn discover_roots_nested_repo() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir_all(nested.join(".git")).unwrap();
+
+        let roots = super::discover_repo_roots(dir.path()).unwrap();
+        assert_eq!(roots.len(), 2);
+        assert!(roots.contains(&dir.path().to_path_buf()));
+        assert!(roots.contains(&nested));
+    }
+
+    /// Regression test for #71: outer `.gitignore` of `*` prunes nested source.
+    /// The per-repo walk must discover the nested git repo and index its files.
+    #[test]
+    fn collect_files_nested_repo_gitignore_star() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Outer repo with .gitignore = * (ignore everything except whitelist)
+        std::fs::create_dir(root.join(".git")).unwrap();
+        std::fs::write(root.join(".gitignore"), "*\n!.gitignore\n!.coree.toml\n").unwrap();
+        std::fs::write(root.join(".coree.toml"), "[project]\nid = \"test\"\n").unwrap();
+
+        // Nested git repo (hidden by outer .gitignore *)
+        let nested = root.join("coree");
+        std::fs::create_dir_all(nested.join(".git")).unwrap();
+        std::fs::create_dir_all(nested.join("src")).unwrap();
+        std::fs::write(nested.join("src").join("main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(nested.join("src").join("lib.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }\n").unwrap();
+
+        let files = super::collect_files(root, &[]).unwrap();
+        let paths: Vec<String> = files
+            .iter()
+            .map(|(p, _)| p.strip_prefix(root).unwrap().to_string_lossy().to_string())
+            .collect();
+
+        // Outer whitelisted file
+        assert!(paths.contains(&".coree.toml".to_string()), "outer whitelisted file missing: {paths:?}");
+
+        // Nested source files (the bug: these were pruned before the fix)
+        assert!(paths.iter().any(|p| p.contains("coree/src/main.rs")), "nested main.rs missing: {paths:?}");
+        assert!(paths.iter().any(|p| p.contains("coree/src/lib.rs")), "nested lib.rs missing: {paths:?}");
+
+        // Nested repo .git directory itself is excluded (is_excluded catches .git dirs)
+        assert!(!paths.iter().any(|p| p.contains(".git")), ".git dir should not be indexed: {paths:?}");
+    }
+
+    /// Child repo `.gitignore` (e.g. `target/`) is still honoured by the
+    /// per-repo walk — the parent's blanket `*` no longer prunes, but the
+    /// child's own excludes still apply.
+    #[test]
+    fn collect_files_nested_respects_child_gitignore() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Outer repo with gitignore = * (ignore everything)
+        std::fs::create_dir(root.join(".git")).unwrap();
+        std::fs::write(root.join(".gitignore"), "*\n!.gitignore\n").unwrap();
+
+        // Nested repo with its own .gitignore excluding target/
+        let nested = root.join("mylib");
+        std::fs::create_dir_all(nested.join(".git")).unwrap();
+        std::fs::create_dir_all(nested.join("target")).unwrap();
+        std::fs::create_dir_all(nested.join("src")).unwrap();
+        std::fs::write(nested.join(".gitignore"), "target/\n").unwrap();
+        std::fs::write(nested.join("src").join("lib.rs"), "pub fn foo() {}\n").unwrap();
+        std::fs::write(nested.join("target").join("output.txt"), "build artifact\n").unwrap();
+
+        let files = super::collect_files(root, &[]).unwrap();
+        let paths: Vec<String> = files
+            .iter()
+            .map(|(p, _)| p.strip_prefix(root).unwrap().to_string_lossy().to_string())
+            .collect();
+
+        assert!(paths.iter().any(|p| p.contains("mylib/src/lib.rs")), "nested source missing: {paths:?}");
+        assert!(!paths.iter().any(|p| p.contains("mylib/target")), "child target/ should be excluded: {paths:?}");
     }
 }
