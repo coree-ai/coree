@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, PickFirst, json::JsonString, serde_as};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashSet;
 use tokio::sync::Mutex;
 use turso::Connection;
 use uuid::Uuid;
@@ -483,6 +484,10 @@ impl CoreeServer {
             return Ok("No memories provided.".to_string());
         }
 
+        let project_root = self.config.project_root();
+        let git_ref = index::git::current_branch(project_root);
+        let git_author = index::git::current_author(project_root);
+
         // Generate all embeddings with the lock held for the whole batch.
         let embed_texts: Vec<String> = input
             .memories
@@ -501,46 +506,85 @@ impl CoreeServer {
             out
         };
 
-        let mut results = Vec::with_capacity(input.memories.len());
+        let mut stored: Vec<(store::StoreResult, Vec<f32>, String)> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+        let mut batch_ids: HashSet<String> = HashSet::new();
+
         for (memory, embedding) in input.memories.into_iter().zip(embeddings) {
             let project = memory.project_id.unwrap_or_else(|| self.project_id.clone());
             let req = store::StoreRequest {
                 content: memory.content,
                 memory_type: memory.memory_type,
-                title: memory.title,
+                title: memory.title.clone(),
                 tags: memory.tags,
                 topic_key: memory.topic_key,
-                project_id: project,
+                project_id: project.clone(),
                 session_id: self.session_id.clone(),
                 importance: memory.importance,
                 facts: memory.facts,
                 source: memory.source,
                 pinned: memory.pinned,
+                git_ref: git_ref.clone(),
+                git_author: git_author.clone(),
             };
+            let emb_clone = embedding.clone();
             match store::store_memory(&ready.conn, embedding, &self.write_lock, req, 30).await {
                 Ok(r) => {
-                    let mut result = if r.upserted {
-                        format!("Updated {}", r.id)
-                    } else {
-                        format!("Stored {}", r.id)
-                    };
-                    if r.redaction_count > 0 {
-                        result.push_str(&format!(
-                            ". redacted {} secret-like value(s)",
-                            r.redaction_count
-                        ));
-                    }
-                    results.push(result);
-                    let mut map = self.cross_session.lock().await;
-                    let t = map.entry(self.session_id.clone()).or_default();
-                    if t.watermark.is_none() {
-                        t.watermark = Some(Utc::now().to_rfc3339());
-                    }
-                    t.seen.insert(r.id, r.content_hash);
+                    batch_ids.insert(r.id.clone());
+                    stored.push((r, emb_clone, project));
                 }
-                Err(e) => results.push(tool_err(format!("store failed: {e}"))),
+                Err(e) => errors.push(tool_err(format!("store failed: {e}"))),
             }
         }
+
+        let mut results = Vec::with_capacity(stored.len() + errors.len());
+        for (store_result, embedding, project) in stored {
+            let mut result = if store_result.upserted {
+                format!("Updated {}", store_result.id)
+            } else {
+                format!("Stored {}", store_result.id)
+            };
+            if store_result.redaction_count > 0 {
+                result.push_str(&format!(
+                    ". redacted {} secret-like value(s)",
+                    store_result.redaction_count
+                ));
+            }
+
+            let related = retrieve::related_memories(
+                &ready.conn,
+                &embedding,
+                &project,
+                &batch_ids,
+                5,
+            )
+            .await
+            .unwrap_or_default();
+
+            if !related.is_empty() {
+                result.push('\n');
+                for (i, r) in related.iter().enumerate() {
+                    if i > 0 {
+                        result.push('\n');
+                    }
+                    result.push_str(&format!(
+                        "  related: {} [{}] d={:.3}",
+                        r.title, r.id, r.distance
+                    ));
+                }
+            }
+
+            results.push(result);
+
+            let mut map = self.cross_session.lock().await;
+            let t = map.entry(self.session_id.clone()).or_default();
+            if t.watermark.is_none() {
+                t.watermark = Some(Utc::now().to_rfc3339());
+            }
+            t.seen.insert(store_result.id, store_result.content_hash);
+        }
+
+        results.extend(errors);
         Ok(results.join("\n"))
     }
 
@@ -1932,8 +1976,14 @@ fn format_full_memory(m: &retrieve::FullMemory) -> String {
     } else {
         format!("- {}", facts.join("\n- "))
     };
+    let provenance = match (&m.git_ref, &m.git_author) {
+        (Some(r), Some(a)) => format!("\nBranch: {r}\nAuthor: {a}"),
+        (Some(r), None) => format!("\nBranch: {r}"),
+        (None, Some(a)) => format!("\nAuthor: {a}"),
+        (None, None) => String::new(),
+    };
     format!(
-        "[{memory_type}] {title}\nID: {id}\nCreated: {created}\nImportance: {imp:.1}\nTags: {tags}\n\nContent:\n{content}\n\nFacts:\n{facts}",
+        "[{memory_type}] {title}\nID: {id}\nCreated: {created}\nImportance: {imp:.1}\nTags: {tags}{provenance}\n\nContent:\n{content}\n\nFacts:\n{facts}",
         memory_type = m.memory_type,
         title = m.title,
         id = m.id,

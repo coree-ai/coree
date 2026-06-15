@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use turso::{Connection, Value, params_from_iter};
 
 use crate::embed;
@@ -105,6 +105,72 @@ pub struct FullMemory {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+    pub git_ref: Option<String>,
+    pub git_author: Option<String>,
+}
+
+/// Cosine distance threshold for related-memory neighbour queries.
+/// Distinct from MAX_COSINE_DIST so the two can be tuned independently.
+pub const RELATED_MAX_DIST: f64 = 0.30;
+
+/// Per-memory related result returned by store_memories.
+pub struct RelatedMemory {
+    pub id: String,
+    pub title: String,
+    pub distance: f64,
+}
+
+/// Return near-neighbour memories (by cosine distance) for a single stored embedding.
+/// Excludes `exclude_ids` (the batch's own results). Read-only: no access_count or mutation.
+pub async fn related_memories(
+    conn: &Connection,
+    embedding: &[f32],
+    project_id: &str,
+    exclude_ids: &HashSet<String>,
+    limit: usize,
+) -> Result<Vec<RelatedMemory>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let blob = embed::floats_to_blob(embedding);
+    let placeholders = if exclude_ids.is_empty() {
+        String::new()
+    } else {
+        let ph = exclude_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        format!(" AND m.id NOT IN ({ph}) ")
+    };
+    let sql = format!(
+        "SELECT m.id, m.title, vector_distance_cos(v.embedding, vector32(?)) as dist
+         FROM memories m
+         JOIN memory_vectors v ON v.memory_id = m.id
+         WHERE m.project_id = ? AND m.status = 'active' AND v.embed_model = ?{placeholders}
+         ORDER BY dist
+         LIMIT ?"
+    );
+    let mut params: Vec<Value> = vec![
+        Value::Blob(blob),
+        Value::Text(project_id.to_string()),
+        Value::Text(embed::model_id()),
+    ];
+    for id in exclude_ids {
+        params.push(Value::Text(id.clone()));
+    }
+    params.push(Value::Integer(limit as i64));
+
+    let mut rows = conn.query(&sql, params_from_iter(params)).await?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let dist: f64 = row.get(2).unwrap_or(1.0);
+        if dist > RELATED_MAX_DIST {
+            break;
+        }
+        results.push(RelatedMemory {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            distance: dist,
+        });
+    }
+    Ok(results)
 }
 
 /// Hybrid RRF search combining vector similarity and keyword search.
@@ -335,7 +401,8 @@ pub async fn get_full_batch(
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     let sql = format!(
         "SELECT id, project_id, type, title, content, facts, tags,
-                importance, access_count, pinned, status, created_at, updated_at
+                importance, access_count, pinned, status, created_at, updated_at,
+                git_ref, git_author
          FROM memories WHERE id IN ({placeholders}) AND status = 'active' AND project_id = ?"
     );
     let select_params: Vec<Value> = ids
@@ -362,6 +429,8 @@ pub async fn get_full_batch(
             status: row.get(10)?,
             created_at: row.get(11)?,
             updated_at: row.get(12)?,
+            git_ref: row.get(13).ok().flatten(),
+            git_author: row.get(14).ok().flatten(),
         });
     }
 

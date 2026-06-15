@@ -48,6 +48,10 @@ const MIGRATIONS: &[Migration] = &[
         name: "v004_active_topic_key",
         sql: include_str!("migrations/v004_active_topic_key.sql"),
     },
+    Migration {
+        name: "v005_git_provenance",
+        sql: include_str!("migrations/v005_git_provenance.sql"),
+    },
 ];
 
 pub async fn run(conn: &Connection) -> Result<()> {
@@ -96,6 +100,7 @@ async fn apply(conn: &Connection, migration: &Migration) -> Result<()> {
     match migration.name {
         "v002_embed_model" => apply_v002(conn, migration).await?,
         "v003_drop_unused" => apply_v003(conn, migration).await?,
+        "v005_git_provenance" => apply_v005(conn, migration).await?,
         _ => {
             conn.execute_batch(migration.sql).await?;
         }
@@ -148,6 +153,19 @@ async fn apply_v003(conn: &Connection, _migration: &Migration) -> Result<()> {
             && !e.to_string().contains("no such column")
         {
             return Err(anyhow::anyhow!("v003 migration: {e}"));
+        }
+    }
+    Ok(())
+}
+
+/// v005: ADD COLUMN git_ref and git_author with "duplicate column name" idempotency.
+async fn apply_v005(conn: &Connection, _migration: &Migration) -> Result<()> {
+    for col in ["git_ref", "git_author"] {
+        let sql = format!("ALTER TABLE memories ADD COLUMN {col} TEXT");
+        if let Err(e) = conn.execute(&sql, ()).await
+            && !e.to_string().contains("duplicate column name")
+        {
+            return Err(anyhow::anyhow!("v005 migration ({col}): {e}"));
         }
     }
     Ok(())

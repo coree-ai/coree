@@ -3,7 +3,7 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use turso::Connection;
+use turso::{Connection, Value, params_from_iter};
 use uuid::Uuid;
 
 use crate::{embed, sanitize};
@@ -25,6 +25,10 @@ pub struct StoreRequest {
     pub source: Option<String>,
     /// None leaves the pinned flag unchanged (defaults to false on insert).
     pub pinned: Option<bool>,
+    /// Server-derived provenance (null means unavailable, not applicable).
+    pub git_ref: Option<String>,
+    /// Server-derived provenance (null means unavailable, not applicable).
+    pub git_author: Option<String>,
 }
 
 pub struct StoreResult {
@@ -193,14 +197,29 @@ pub async fn store_memory(
     conn.execute(
         "INSERT INTO memories
             (id, project_id, topic_key, type, title, content, facts, tags,
-             importance, session_id, source, pinned, created_at, updated_at, content_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, COALESCE(?11, 'realtime'), COALESCE(?12, 0), ?13, ?14, ?15)",
-        (
-            id.clone(), req.project_id, req.topic_key, req.memory_type,
-            title, content, facts_json, tags_json,
-            importance, req.session_id, req.source, pinned_val,
-            now_str.clone(), now_str, hash.clone()
-        ),
+             importance, session_id, source, pinned, created_at, updated_at, content_hash,
+             git_ref, git_author)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, COALESCE(?11, 'realtime'), COALESCE(?12, 0), ?13, ?14, ?15,
+                 ?16, ?17)",
+        params_from_iter(vec![
+            Value::Text(id.clone()),
+            Value::Text(req.project_id),
+            Value::from(req.topic_key),
+            Value::Text(req.memory_type),
+            Value::Text(title),
+            Value::Text(content),
+            Value::from(facts_json),
+            Value::from(tags_json),
+            Value::Real(importance),
+            Value::Text(req.session_id),
+            Value::from(req.source),
+            Value::from(pinned_val.map(|v| v as i64)),
+            Value::Text(now_str.clone()),
+            Value::Text(now_str),
+            Value::Text(hash.clone()),
+            Value::from(req.git_ref),
+            Value::from(req.git_author),
+        ]),
     )
     .await?;
 

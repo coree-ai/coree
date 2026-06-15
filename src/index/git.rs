@@ -237,6 +237,43 @@ pub fn head_commit(repo_root: &Path) -> Option<CommitInfo> {
     })
 }
 
+/// Returns the current branch short name, or None on detached HEAD or not a git repo.
+pub fn current_branch(repo_root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    std::str::from_utf8(&output.stdout).ok().map(|s| s.trim().to_string())
+}
+
+/// Returns the git identity, or None when unavailable.
+/// Tries `git config user.name` first, falls back to `user.email`.
+/// This is the git committer identity, NOT the AI tool or model.
+pub fn current_author(repo_root: &Path) -> Option<String> {
+    for key in ["user.name", "user.email"] {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .args(["config", key])
+            .output()
+            .ok()?;
+        if output.status.success() {
+            if let Ok(s) = std::str::from_utf8(&output.stdout) {
+                let trimmed = s.trim().to_string();
+                if !trimmed.is_empty() {
+                    return Some(trimmed);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Returns relative paths of files changed in HEAD (works for initial commits too).
 pub fn files_in_head_commit(repo_root: &Path) -> Vec<String> {
     let output = match Command::new("git")

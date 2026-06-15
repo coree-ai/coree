@@ -18,6 +18,8 @@ fn basic_request(content: &str) -> StoreRequest {
         facts: vec![],
         source: None,
         pinned: None,
+        git_ref: None,
+        git_author: None,
     }
 }
 
@@ -354,6 +356,127 @@ async fn topic_key_upsert_updates_content() {
             .next()
             .unwrap();
     assert_eq!(mem.content, "Updated content");
+}
+
+// --- related_memories ---
+
+#[tokio::test]
+async fn related_memories_excludes_batch_ids() {
+    let db = setup().await;
+    let lock = new_write_lock();
+
+    let r1 = coree::store::store_memory(
+        &db.conn,
+        dummy_embedding(),
+        &lock,
+        basic_request("Rust async programming patterns"),
+        30,
+    )
+    .await
+    .unwrap();
+
+    let r2 = coree::store::store_memory(
+        &db.conn,
+        dummy_embedding(),
+        &lock,
+        basic_request("Rust async programming best practices"),
+        30,
+    )
+    .await
+    .unwrap();
+
+    let batch_ids: std::collections::HashSet<String> =
+        [r1.id.clone(), r2.id.clone()].into_iter().collect();
+
+    let related = coree::retrieve::related_memories(
+        &db.conn,
+        &dummy_embedding(),
+        "test-project",
+        &batch_ids,
+        5,
+    )
+    .await
+    .unwrap();
+
+    for r in &related {
+        assert_ne!(
+            r.id, r1.id,
+            "related list must not contain any memory from the batch (r1)"
+        );
+        assert_ne!(
+            r.id, r2.id,
+            "related list must not contain any memory from the batch (r2)"
+        );
+    }
+}
+
+#[tokio::test]
+async fn related_memories_empty_exclude_set_works() {
+    let db = setup().await;
+    let lock = new_write_lock();
+
+    coree::store::store_memory(
+        &db.conn,
+        dummy_embedding(),
+        &lock,
+        basic_request("Some memory"),
+        30,
+    )
+    .await
+    .unwrap();
+
+    let related = coree::retrieve::related_memories(
+        &db.conn,
+        &dummy_embedding(),
+        "test-project",
+        &std::collections::HashSet::new(),
+        5,
+    )
+    .await
+    .unwrap();
+
+    assert!(!related.is_empty(), "should find the stored memory when no exclusions");
+}
+
+#[tokio::test]
+async fn related_memories_respects_limit_and_distance_threshold() {
+    let db = setup().await;
+    let lock = new_write_lock();
+
+    for i in 0..10 {
+        let mut req = basic_request(&format!("Memory number {}", i));
+        req.title = format!("Title {}", i);
+        coree::store::store_memory(
+            &db.conn,
+            dummy_embedding(),
+            &lock,
+            req,
+            30,
+        )
+        .await
+        .unwrap();
+    }
+
+    let related = coree::retrieve::related_memories(
+        &db.conn,
+        &dummy_embedding(),
+        "test-project",
+        &std::collections::HashSet::new(),
+        3,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        related.len() <= 3,
+        "should respect the limit parameter"
+    );
+    for r in &related {
+        assert!(
+            r.distance <= coree::retrieve::RELATED_MAX_DIST,
+            "all results must be within RELTED_MAX_DIST threshold"
+        );
+    }
 }
 
 #[tokio::test]

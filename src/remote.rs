@@ -254,7 +254,8 @@ async fn copy_memories(local: &Connection, remote: &Connection, total: i64) -> R
         .query(
             "SELECT id, project_id, topic_key, type, title, content, facts, tags,
                     importance, access_count, last_accessed, pinned, status,
-                    session_id, source, created_at, updated_at, content_hash
+                    session_id, source, created_at, updated_at, content_hash,
+                    git_ref, git_author
              FROM memories",
             (),
         )
@@ -267,8 +268,9 @@ async fn copy_memories(local: &Connection, remote: &Connection, total: i64) -> R
                 "INSERT OR IGNORE INTO memories
                     (id, project_id, topic_key, type, title, content, facts, tags,
                      importance, access_count, last_accessed, pinned, status,
-                     session_id, source, created_at, updated_at, content_hash)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+                     session_id, source, created_at, updated_at, content_hash,
+                     git_ref, git_author)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
                 // GOTCHA: The Turso Rust driver's IntoParams trait is only implemented for
                 // tuples up to size 16. For this 18-column insert, we must use params_from_iter.
                 params_from_iter(vec![
@@ -290,6 +292,8 @@ async fn copy_memories(local: &Connection, remote: &Connection, total: i64) -> R
                     Value::Text(row.get::<String>(15)?),
                     Value::Text(row.get::<String>(16)?),
                     Value::Text(row.get::<String>(17)?),
+                    Value::from(row.get::<Option<String>>(18)?),
+                    Value::from(row.get::<Option<String>>(19)?),
                 ]),
             )
             .await?;

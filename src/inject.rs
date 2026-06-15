@@ -315,6 +315,12 @@ fn format_full_memory(mem: &retrieve::FullMemory) -> String {
         "[{} {:.2}] {}\nid: {} | {}\n",
         mem.memory_type, mem.importance, mem.title, mem.id, date
     );
+    if let Some(ref r) = mem.git_ref {
+        out.push_str(&format!("branch: {r}\n"));
+    }
+    if let Some(ref a) = mem.git_author {
+        out.push_str(&format!("author: {a}\n"));
+    }
     if let Some(tags) = &mem.tags {
         let parsed: Vec<String> = serde_json::from_str(tags).unwrap_or_default();
         if !parsed.is_empty() {
