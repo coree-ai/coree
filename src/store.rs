@@ -31,6 +31,7 @@ pub struct StoreResult {
     pub id: String,
     pub upserted: bool,
     pub redaction_count: usize,
+    pub content_hash: String,
 }
 
 /// Shared write lock - prevents TOCTOU races when multiple hooks fire concurrently.
@@ -126,6 +127,7 @@ pub async fn store_memory(
             id: existing_id,
             upserted: false,
             redaction_count: 0,
+            content_hash: hash,
         });
     }
 
@@ -155,7 +157,7 @@ pub async fn store_memory(
                     tags_json,
                     facts_json,
                     importance,
-                    hash,
+                    hash.clone(),
                     now_str.clone(),
                     req.source.clone(),
                     pinned_val,
@@ -180,6 +182,7 @@ pub async fn store_memory(
                 id: id.clone(),
                 upserted: true,
                 redaction_count,
+                content_hash: hash,
             });
         }
     }
@@ -196,7 +199,7 @@ pub async fn store_memory(
             id.clone(), req.project_id, req.topic_key, req.memory_type,
             title, content, facts_json, tags_json,
             importance, req.session_id, req.source, pinned_val,
-            now_str.clone(), now_str, hash
+            now_str.clone(), now_str, hash.clone()
         ),
     )
     .await?;
@@ -211,6 +214,7 @@ pub async fn store_memory(
         id,
         upserted: false,
         redaction_count,
+        content_hash: hash,
     })
 }
 

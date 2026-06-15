@@ -32,6 +32,7 @@ use crate::{
     index, migrations, project_id, remote, request, retrieve,
     store::{self, WriteLock},
 };
+use chrono::Utc;
 
 /// Database connection and embedding model, available once background init completes.
 struct DbReady {
@@ -43,6 +44,12 @@ struct DbReady {
     handle: db::AnyDb,
     #[allow(dead_code)]
     temp_dir: Option<tempfile::TempDir>,
+}
+
+#[derive(Default)]
+struct SessionTracker {
+    seen: std::collections::HashMap<String, String>,
+    watermark: Option<String>,
 }
 
 /// State of the database for two-phase startup.
@@ -69,6 +76,7 @@ struct CoreeServer {
     /// primary over the local socket instead of being served from a local DB
     /// (which a secondary never opens).
     is_primary: Arc<AtomicBool>,
+    cross_session: Arc<Mutex<std::collections::HashMap<String, SessionTracker>>>,
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
     #[allow(dead_code)]
@@ -134,6 +142,87 @@ impl CoreeServer {
             ),
             index::IndexState::Failed(msg) => Err(format!("Code index failed: {msg}")),
         }
+    }
+
+    /// Query the memory DB for high-importance memories from other sessions that
+    /// have been created or updated since this session's watermark. Deduplicates
+    /// against the in-memory seen-set. Returns a compact notification block,
+    /// or None if nothing new.
+    async fn cross_session_block(&self, conn: &Connection) -> Option<String> {
+        let threshold = self.config.memory.cross_session_notification_threshold as f64;
+
+        let mut map = self.cross_session.lock().await;
+        let tracker = map.entry(self.session_id.clone()).or_default();
+        if tracker.watermark.is_none() {
+            tracker.watermark = Some(Utc::now().to_rfc3339());
+        }
+        let watermark = tracker.watermark.clone().unwrap();
+
+        let mut rows = match conn
+            .query(
+                "SELECT id, title, updated_at, content_hash
+                 FROM memories
+                 WHERE project_id = ?1 AND status = 'active'
+                   AND importance >= ?2 AND session_id != ?3 AND updated_at > ?4
+                 ORDER BY updated_at ASC, id ASC",
+                (
+                    self.project_id.clone(),
+                    threshold,
+                    self.session_id.clone(),
+                    watermark.clone(),
+                ),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => return None,
+        };
+
+        let mut candidates: Vec<(String, String, String, String)> = Vec::new();
+        let mut max_updated_at = watermark.clone();
+        while let Some(row) = rows.next().await.ok().flatten() {
+            let id: String = row.get(0).unwrap_or_default();
+            let title: String = row.get(1).unwrap_or_default();
+            let updated_at: String = row.get(2).unwrap_or_default();
+            let content_hash: String = row.get(3).unwrap_or_default();
+            if tracker.seen.get(&id) == Some(&content_hash) {
+                continue;
+            }
+            if updated_at > max_updated_at {
+                max_updated_at = updated_at.clone();
+            }
+            candidates.push((id, title, updated_at, content_hash));
+        }
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        tracker.watermark = Some(max_updated_at);
+        for (id, _title, _updated_at, content_hash) in &candidates {
+            tracker.seen.insert(id.clone(), content_hash.clone());
+        }
+
+        const CAP: usize = 3;
+        let total = candidates.len();
+        let overflow = total.saturating_sub(CAP);
+
+        let mut block = format!(
+            "[coree] {total} new memor{} from other sessions: ",
+            if total == 1 { "y" } else { "ies" }
+        );
+        for (i, (id, title, ..)) in candidates.iter().take(CAP).enumerate() {
+            if i > 0 {
+                block.push_str("; ");
+            }
+            block.push_str(&format!("{title} [{id}]"));
+        }
+        if overflow > 0 {
+            block.push_str(&format!(" … +{overflow} more"));
+        }
+        block.push_str(" — get_memories(ids) for detail");
+
+        Some(block)
     }
 }
 
@@ -442,6 +531,12 @@ impl CoreeServer {
                         ));
                     }
                     results.push(result);
+                    let mut map = self.cross_session.lock().await;
+                    let t = map.entry(self.session_id.clone()).or_default();
+                    if t.watermark.is_none() {
+                        t.watermark = Some(Utc::now().to_rfc3339());
+                    }
+                    t.seen.insert(r.id, r.content_hash);
                 }
                 Err(e) => results.push(tool_err(format!("store failed: {e}"))),
             }
@@ -686,7 +781,9 @@ impl CoreeServer {
             .map_err(|e| tool_err(format!("remote_sync failed: {e}")))
     }
 
-    #[tool(description = "Soft-delete one or more memories by ID. Marked deleted, recoverable until evicted.")]
+    #[tool(
+        description = "Soft-delete one or more memories by ID. Marked deleted, recoverable until evicted."
+    )]
     async fn delete_memories(
         &self,
         Parameters(input): Parameters<DeleteMemoriesInput>,
@@ -745,9 +842,14 @@ impl CoreeServer {
             return r;
         }
         let ready = self.try_ready()?;
-        crate::inject::build_tool_session_content(&ready.conn, &self.project_id)
+        let mut content = crate::inject::build_tool_session_content(&ready.conn, &self.project_id)
             .await
-            .map_err(|e| tool_err(format!("session_context failed: {e}")))
+            .map_err(|e| tool_err(format!("session_context failed: {e}")))?;
+        if let Some(block) = self.cross_session_block(&ready.conn).await {
+            content.push('\n');
+            content.push_str(&block);
+        }
+        Ok(content)
     }
 
     #[tool(
@@ -793,7 +895,11 @@ impl CoreeServer {
         let (role, mem_display, idx_display) = if is_primary {
             ("primary", db_status.clone(), idx_status.clone())
         } else if ready_file_exists {
-            ("secondary", "ready (via primary)".to_string(), "ready (via primary)".to_string())
+            (
+                "secondary",
+                "ready (via primary)".to_string(),
+                "ready (via primary)".to_string(),
+            )
         } else {
             ("starting", db_status.clone(), idx_status.clone())
         };
@@ -1204,6 +1310,10 @@ impl CoreeServer {
         out.push_str(&format!(
             "_meta: {{returned: {total}, total_before_cutoff: {all_count}, truncated: {truncated}{index_field}{reembed_note}}}\n"
         ));
+        if let Some(block) = self.cross_session_block(&db_ready.conn).await {
+            out.push('\n');
+            out.push_str(&block);
+        }
         tracing::debug!(
             elapsed_ms = t_search.elapsed().as_millis(),
             total,
@@ -1397,6 +1507,9 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
     // Until then this is a secondary and tool handlers proxy to the primary.
     let is_primary = Arc::new(AtomicBool::new(false));
 
+    let cross_session: Arc<Mutex<std::collections::HashMap<String, SessionTracker>>> =
+        Arc::new(Mutex::new(std::collections::HashMap::new()));
+
     let server = CoreeServer {
         db: db_rx,
         idx: idx_rx,
@@ -1405,6 +1518,7 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
         project_id: project_id.clone(),
         config: Arc::new(config.clone()),
         is_primary: Arc::clone(&is_primary),
+        cross_session: Arc::clone(&cross_session),
         tool_router: CoreeServer::tool_router(),
         prompt_router: CoreeServer::prompt_router(),
     };
@@ -1888,5 +2002,224 @@ mod tests {
             limit: Some(7),
         };
         assert_eq!(roundtrip(&search).limit, Some(7));
+    }
+
+    fn make_config() -> Config {
+        let mut cfg = Config::default();
+        cfg.project_id = Some("test-project".to_string());
+        cfg.memory.cross_session_notification_threshold = 0.8;
+        cfg
+    }
+
+    fn make_server(session_id: &str, config: Config) -> CoreeServer {
+        let (_db_tx, db_rx) = tokio::sync::watch::channel(DbState::Syncing);
+        let (_idx_tx, idx_rx) = tokio::sync::watch::channel(index::IndexState::Disabled);
+        CoreeServer {
+            db: db_rx,
+            idx: idx_rx,
+            write_lock: store::new_write_lock(),
+            session_id: session_id.to_string(),
+            project_id: config.project_id.clone().unwrap_or_default(),
+            config: Arc::new(config),
+            is_primary: Arc::new(AtomicBool::new(true)),
+            cross_session: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            tool_router: CoreeServer::tool_router(),
+            prompt_router: CoreeServer::prompt_router(),
+        }
+    }
+
+    async fn setup_memories_table(conn: &Arc<turso::Connection>) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS memories (
+                id            TEXT PRIMARY KEY,
+                project_id    TEXT NOT NULL,
+                type          TEXT NOT NULL,
+                title         TEXT NOT NULL,
+                content       TEXT NOT NULL,
+                importance    REAL    DEFAULT 0.5,
+                session_id    TEXT,
+                status        TEXT    DEFAULT 'active',
+                created_at    TEXT    NOT NULL,
+                updated_at    TEXT    NOT NULL,
+                content_hash  TEXT    NOT NULL
+            );",
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn insert_memory(
+        conn: &Arc<turso::Connection>,
+        project_id: &str,
+        session_id: &str,
+        title: &str,
+        importance: f64,
+        updated_at: &str,
+    ) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let hash = format!("hash-{id}");
+        conn.execute(
+            "INSERT INTO memories (id, project_id, type, title, content, importance, session_id, status, created_at, updated_at, content_hash)
+             VALUES (?1, ?2, 'decision', ?3, 'test content', ?4, ?5, 'active', ?6, ?7, ?8)",
+            (
+                id.clone(),
+                project_id.to_string(),
+                title.to_string(),
+                importance,
+                session_id.to_string(),
+                updated_at.to_string(),
+                updated_at.to_string(),
+                hash,
+            ),
+        )
+        .await
+        .unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn cross_session_surfaces_high_importance_memory() {
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = Arc::new(db.connect().unwrap());
+        setup_memories_table(&conn).await;
+
+        let session_a = "session-a";
+        let session_b = "session-b";
+        let config = make_config();
+        let server = make_server(session_b, config);
+
+        let future = "2099-01-01T00:00:00Z";
+        insert_memory(&conn, "test-project", session_a, "Test Memory", 0.9, future).await;
+
+        let block = server.cross_session_block(&conn).await;
+        assert!(
+            block.is_some(),
+            "should surface high-importance memory from another session"
+        );
+        assert!(block.unwrap().contains("Test Memory"));
+    }
+
+    #[tokio::test]
+    async fn cross_session_dedup_second_call_empty() {
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = Arc::new(db.connect().unwrap());
+        setup_memories_table(&conn).await;
+
+        let session_a = "session-a";
+        let session_b = "session-b";
+        let config = make_config();
+        let server = make_server(session_b, config);
+
+        let future = "2099-01-01T00:00:00Z";
+        insert_memory(&conn, "test-project", session_a, "Test Memory", 0.9, future).await;
+
+        let block1 = server.cross_session_block(&conn).await;
+        assert!(block1.is_some(), "first call should surface");
+
+        let block2 = server.cross_session_block(&conn).await;
+        assert!(
+            block2.is_none(),
+            "second call should not re-surface same memory"
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_session_filters_self_session() {
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = Arc::new(db.connect().unwrap());
+        setup_memories_table(&conn).await;
+
+        let session_a = "session-a";
+        let now = Utc::now().to_rfc3339();
+
+        insert_memory(&conn, "test-project", session_a, "Test Memory", 0.9, &now).await;
+
+        let config = make_config();
+        let server = make_server(session_a, config);
+
+        let block = server.cross_session_block(&conn).await;
+        assert!(block.is_none(), "should not surface own session's memory");
+    }
+
+    #[tokio::test]
+    async fn cross_session_filters_below_threshold() {
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = Arc::new(db.connect().unwrap());
+        setup_memories_table(&conn).await;
+
+        let session_a = "session-a";
+        let session_b = "session-b";
+        let now = Utc::now().to_rfc3339();
+
+        insert_memory(&conn, "test-project", session_a, "Low Mem", 0.3, &now).await;
+
+        let config = make_config();
+        let server = make_server(session_b, config);
+
+        let block = server.cross_session_block(&conn).await;
+        assert!(block.is_none(), "should not surface below-threshold memory");
+    }
+
+    #[tokio::test]
+    async fn cross_session_watermark_advances() {
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = Arc::new(db.connect().unwrap());
+        setup_memories_table(&conn).await;
+
+        let session_a = "session-a";
+        let session_b = "session-b";
+
+        let config = make_config();
+        let server = make_server(session_b, config);
+
+        let t1 = "2099-01-01T10:00:00Z";
+        let t2 = "2099-01-01T11:00:00Z";
+
+        insert_memory(&conn, "test-project", session_a, "First", 0.9, t1).await;
+        let block1 = server.cross_session_block(&conn).await;
+        assert!(block1.is_some(), "should surface first memory");
+
+        insert_memory(&conn, "test-project", session_a, "Second", 0.9, t2).await;
+        let block2 = server.cross_session_block(&conn).await;
+        assert!(
+            block2.is_some(),
+            "should surface second memory after watermark advance"
+        );
+        assert!(block2.unwrap().contains("Second"));
+    }
+
+    #[tokio::test]
+    async fn cross_session_cap_and_overflow() {
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = Arc::new(db.connect().unwrap());
+        setup_memories_table(&conn).await;
+
+        let session_a = "session-a";
+        let session_b = "session-b";
+
+        let config = make_config();
+        let server = make_server(session_b, config);
+
+        for i in 0..5 {
+            let ts = format!("2099-01-01T10:{:02}:00Z", i);
+            insert_memory(
+                &conn,
+                "test-project",
+                session_a,
+                &format!("Mem {i}"),
+                0.9,
+                &ts,
+            )
+            .await;
+        }
+
+        let block = server.cross_session_block(&conn).await;
+        assert!(block.is_some());
+        let text = block.unwrap();
+        assert!(text.contains("5 new memories"), "should show total count");
+        assert!(text.contains("+2 more"), "should show overflow indicator");
+
+        let block2 = server.cross_session_block(&conn).await;
+        assert!(block2.is_none(), "no more after marking all as seen");
     }
 }

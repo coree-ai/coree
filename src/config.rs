@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
@@ -61,10 +61,25 @@ impl std::fmt::Debug for StorageConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct MemoryConfig {
     #[serde(flatten)]
     pub storage: StorageConfig,
+    #[serde(default = "default_cross_session_threshold")]
+    pub cross_session_notification_threshold: f32,
+}
+
+fn default_cross_session_threshold() -> f32 {
+    0.8
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            storage: StorageConfig::default(),
+            cross_session_notification_threshold: 0.8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -150,11 +165,7 @@ fn coree_env() -> Env {
         .map(|(k, _)| k)
         .collect();
     Env::raw()
-        .filter_map(move |k| {
-            valid
-                .contains(k.as_str())
-                .then(|| k[PREFIX.len()..].into())
-        })
+        .filter_map(move |k| valid.contains(k.as_str()).then(|| k[PREFIX.len()..].into()))
         .split("__")
 }
 
@@ -477,6 +488,7 @@ mod tests {
                     remote_url: Some("libsql://mem.turso.io".to_string()),
                     ..Default::default()
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -498,7 +510,11 @@ mod tests {
 
     #[test]
     fn normalize_index_storage_leaves_managed_and_disabled() {
-        for mode in [StorageMode::Managed, StorageMode::Local, StorageMode::Disabled] {
+        for mode in [
+            StorageMode::Managed,
+            StorageMode::Local,
+            StorageMode::Disabled,
+        ] {
             let mut cfg = Config {
                 project_root: Some(PathBuf::from("/some/project")),
                 index: IndexConfig {
@@ -524,6 +540,7 @@ mod tests {
                     mode: StorageMode::Local,
                     ..Default::default()
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -543,6 +560,7 @@ mod tests {
                     local_path: Some(PathBuf::from("custom/memory.db")),
                     ..Default::default()
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
