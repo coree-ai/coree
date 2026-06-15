@@ -1471,7 +1471,7 @@ async fn reembed_stale(conn: Arc<Connection>, embedder: Arc<Mutex<Embedder>>) {
     }
 }
 
-pub async fn run(config: Config) -> Result<()> {
+pub async fn run(config: Config, force_reindex: bool) -> Result<()> {
     // Init file logger first — all subsequent mlog! calls mirror to this file.
     let log_path = config
         .db_path()
@@ -1518,7 +1518,7 @@ pub async fn run(config: Config) -> Result<()> {
         let _ = std::fs::write(&crash_log_hook, &msg);
     }));
 
-    let result = serve_inner(config, pid).await;
+    let result = serve_inner(config, pid, force_reindex).await;
     if let Err(ref e) = result {
         mlog!("ERROR: {e:#}");
         let msg = format!("[{}] ERROR: {e:#}\n", chrono::Utc::now().format("%H:%M:%S"));
@@ -1535,7 +1535,7 @@ pub async fn run(config: Config) -> Result<()> {
     result
 }
 
-async fn serve_inner(config: Config, project_id: String) -> Result<()> {
+async fn serve_inner(config: Config, project_id: String, force_reindex: bool) -> Result<()> {
     // Set up watch channels for memory DB and code index.
     let (db_tx, db_rx) = tokio::sync::watch::channel(DbState::Syncing);
     let (idx_tx, idx_rx) = tokio::sync::watch::channel(index::IndexState::Opening);
@@ -1657,6 +1657,47 @@ async fn serve_inner(config: Config, project_id: String) -> Result<()> {
                                         return;
                                     }
                                 };
+
+                                let needs_rebuild = match index::needs_rebuild(&indexer_conn).await {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        mlog!(
+                                            "coree: failed to check index logic version (rebuilding): {e:#}"
+                                        );
+                                        true
+                                    }
+                                };
+
+                                if force_reindex || needs_rebuild {
+                                    if force_reindex {
+                                        mlog!("coree: --reindex flag set, forcing full rebuild");
+                                    } else {
+                                        mlog!(
+                                            "coree: index logic version bump detected, triggering full rebuild"
+                                        );
+                                    }
+                                    match index::indexer::clear_all_tables(&indexer_conn).await {
+                                        Ok(()) => mlog!("coree: index tables cleared for rebuild"),
+                                        Err(e) => mlog!(
+                                            "coree: failed to clear index tables: {e:#}"
+                                        ),
+                                    }
+                                    match index::set_stored_logic_version(
+                                        &indexer_conn,
+                                        index::INDEX_LOGIC_VERSION,
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => mlog!(
+                                            "coree: index logic version set to {}",
+                                            index::INDEX_LOGIC_VERSION
+                                        ),
+                                        Err(e) => mlog!(
+                                            "coree: failed to store index logic version: {e:#}"
+                                        ),
+                                    }
+                                }
+
                                 let emb = Arc::clone(&embedder_for_idx);
                                 match index::indexer::run(
                                     project_root.clone(),

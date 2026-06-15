@@ -106,6 +106,13 @@ pub async fn ensure(conn: &Arc<turso::Connection>) -> Result<()> {
              PRIMARY KEY (file_a, file_b)
          )",
         ),
+        (
+            "meta",
+            "CREATE TABLE IF NOT EXISTS meta (
+             key   TEXT PRIMARY KEY,
+             value TEXT NOT NULL
+         )",
+        ),
     ];
 
     for (name, stmt) in ddl {

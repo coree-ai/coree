@@ -180,6 +180,23 @@ fn collect_files(root: &Path, extra_excludes: &[String]) -> Result<Vec<(PathBuf,
     Ok(files)
 }
 
+/// Clear all rows from every index table.
+///
+/// Deletes dependent rows first (FK CASCADE is inert in Turso). Preserves the
+/// `meta` table (schema version) so version tracking survives a rebuild.
+/// Safe to call while the watcher is running — the watcher will re-index files
+/// as it receives events.
+pub async fn clear_all_tables(conn: &Arc<turso::Connection>) -> Result<()> {
+    // FK CASCADE is inert — delete children before parents
+    conn.execute("DELETE FROM index_vectors", ()).await?;
+    conn.execute("DELETE FROM index_chunk_commits", ()).await?;
+    conn.execute("DELETE FROM index_chunks", ()).await?;
+    conn.execute("DELETE FROM index_files", ()).await?;
+    conn.execute("DELETE FROM index_commits", ()).await?;
+    conn.execute("DELETE FROM index_file_coupling", ()).await?;
+    Ok(())
+}
+
 /// Remove all index data for a deleted file.
 /// Must explicitly delete dependent rows because Turso has FK enforcement off
 /// by default so ON DELETE CASCADE clauses in the schema are inert.

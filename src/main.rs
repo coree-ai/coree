@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use coree::{config::Config, inject, remote, request, serve, status};
+use coree::{config::Config, index, inject, remote, request, serve, status};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -20,6 +20,8 @@ enum Command {
     Serve {
         #[arg(long, help = "Path to .coree.toml (default: auto-discover)")]
         config: Option<PathBuf>,
+        #[arg(long, help = "Force full index rebuild even if versions match")]
+        reindex: bool,
     },
     /// Inject memory context into agent hooks (short-lived, always exits 0)
     Inject {
@@ -56,6 +58,8 @@ enum Command {
     },
     /// Show current configuration and database status
     Status,
+    /// Force a full rebuild of the code index on next serve start (clears stored logic version)
+    Reindex,
 }
 
 #[derive(Subcommand)]
@@ -83,6 +87,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Serve {
             config: config_path,
+            reindex,
         } => {
             // init_tracing_to_file() is called inside serve::run() after log::init(),
             // so tracing output lands in the log file rather than discarded stderr.
@@ -92,7 +97,7 @@ async fn main() -> Result<()> {
                 .and_then(|p| p.parent())
                 .unwrap_or(&cwd);
             let config = Config::load(start)?;
-            serve::run(config).await?;
+            serve::run(config, reindex).await?;
         }
         Command::Inject {
             r#type,
@@ -132,6 +137,17 @@ async fn main() -> Result<()> {
             let cwd = std::env::current_dir()?;
             let config = Config::load(&cwd)?;
             status::run(&config).await?;
+        }
+        Command::Reindex => {
+            let cwd = std::env::current_dir()?;
+            let config = Config::load(&cwd)?;
+            let db_path = config.index_db_path();
+            if !db_path.exists() {
+                println!("No index database found at {}. Index will be built on next serve start.", db_path.display());
+                return Ok(());
+            }
+            index::reset_stored_version(&db_path).await?;
+            println!("Index version reset at {}. Restart coree serve to trigger a full reindex.", db_path.display());
         }
     }
 
