@@ -18,6 +18,19 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  biome:
+    name: Biome (lint + format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Biome CI
+        run: npx @biomejs/biome ci scripts/
+
   # Validate shared scripts with node --check and node --test.
   scripts:
     name: Scripts (node --check + node:test)
