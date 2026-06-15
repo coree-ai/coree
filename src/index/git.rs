@@ -7,11 +7,12 @@ pub struct CommitInfo {
     pub message: String,
 }
 
-/// Extended commit info with timestamp and change size for hotspot scoring.
+/// Extended commit info with timestamp, author, and change size for hotspot scoring.
 #[derive(Debug, Clone)]
 pub struct CommitStat {
     pub sha: String,
     pub message: String,
+    pub author: String,
     pub timestamp_unix: i64,
     pub lines_changed: u32,
 }
@@ -24,7 +25,7 @@ pub fn file_commits_with_stats(repo_root: &Path, file_path: &str, limit: usize) 
         .arg(repo_root)
         .arg("log")
         .arg(format!("-n{}", limit * 3))
-        .arg("--format=format:%H|%at|%s")
+        .arg("--format=format:%H|%at|%an|%s")
         .arg("--numstat")
         .arg("--no-merges")
         .arg("--")
@@ -53,7 +54,8 @@ pub fn file_commits_with_stats(repo_root: &Path, file_path: &str, limit: usize) 
 
 fn parse_commits_with_stats(output: &str) -> Vec<CommitStat> {
     let mut results = Vec::new();
-    let mut current: Option<(String, i64, String)> = None; // (sha, timestamp_unix, message)
+    // (sha, timestamp_unix, author, message)
+    let mut current: Option<(String, i64, String, String)> = None;
     let mut lines_changed: u32 = 0;
 
     for line in output.lines() {
@@ -61,23 +63,29 @@ fn parse_commits_with_stats(output: &str) -> Vec<CommitStat> {
             continue;
         }
 
-        // Header line: full 40-char SHA|unix_timestamp|message
-        let parts: Vec<&str> = line.splitn(3, '|').collect();
-        if parts.len() == 3
+        // Header line: full 40-char SHA|unix_timestamp|author|message
+        let parts: Vec<&str> = line.splitn(4, '|').collect();
+        if parts.len() == 4
             && parts[0].len() == 40
             && parts[0].chars().all(|c| c.is_ascii_hexdigit())
         {
-            if let Some((sha, ts, msg)) = current.take() {
+            if let Some((sha, ts, author, msg)) = current.take() {
                 results.push(CommitStat {
                     sha,
                     timestamp_unix: ts,
+                    author,
                     message: msg,
                     lines_changed,
                 });
                 lines_changed = 0;
             }
             let ts = parts[1].parse::<i64>().unwrap_or(0);
-            current = Some((parts[0].to_string(), ts, parts[2].to_string()));
+            current = Some((
+                parts[0].to_string(),
+                ts,
+                parts[2].to_string(),
+                parts[3].to_string(),
+            ));
             continue;
         }
 
@@ -92,10 +100,11 @@ fn parse_commits_with_stats(output: &str) -> Vec<CommitStat> {
         }
     }
 
-    if let Some((sha, ts, msg)) = current {
+    if let Some((sha, ts, author, msg)) = current {
         results.push(CommitStat {
             sha,
             timestamp_unix: ts,
+            author,
             message: msg,
             lines_changed,
         });

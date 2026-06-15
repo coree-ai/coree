@@ -216,6 +216,55 @@ pub(crate) async fn remove_file(
     Ok(())
 }
 
+/// Recompute file coupling for `file_path` from the current index_chunk_commits table.
+///
+/// Bounds (D3):
+/// - Commits touching >25 distinct indexed files are skipped (refactor/sweep noise).
+/// - Pairs are only retained when shared_commits >= 2.
+///
+/// Limitations documented per issue #63:
+/// - Only sees indexed files (D5: coupling/ownership ignore non-indexed files).
+/// - Branch accumulation accepted (D6: INSERT OR IGNORE on commits means orphan SHAs
+///   from rebase/squash/force-push linger — acceptable v1 staleness).
+async fn refresh_file_coupling(conn: &Arc<turso::Connection>, file_path: &str) -> Result<()> {
+    // Purge existing coupling rows for this file so we can recompute from scratch
+    conn.execute(
+        "DELETE FROM index_file_coupling WHERE file_a = ?1 OR file_b = ?1",
+        (file_path.to_string(),),
+    )
+    .await?;
+
+    // Recompute coupling for this file, skipping noisy commits (D3: >25 distinct
+    // indexed files = refactor/sweep noise) and retaining only pairs with >=2 shared
+    // commits. canonical ordering: file_a < file_b.
+    conn.execute(
+        "INSERT OR REPLACE INTO index_file_coupling (file_a, file_b, shared_commits, last_shared_ts)
+         SELECT
+           CASE WHEN ic1.file_path < ic2.file_path THEN ic1.file_path ELSE ic2.file_path END,
+           CASE WHEN ic1.file_path < ic2.file_path THEN ic2.file_path ELSE ic1.file_path END,
+           COUNT(DISTINCT icc1.commit_sha),
+           MAX(c.timestamp)
+         FROM index_chunk_commits icc1
+         JOIN index_chunks ic1 ON ic1.id = icc1.chunk_id
+         JOIN index_chunk_commits icc2 ON icc2.commit_sha = icc1.commit_sha
+         JOIN index_chunks ic2 ON ic2.id = icc2.chunk_id AND ic2.file_path != ic1.file_path
+         JOIN index_commits c ON c.sha = icc1.commit_sha
+         WHERE ic1.file_path = ?1
+           AND icc1.commit_sha NOT IN (
+               SELECT cc.commit_sha FROM index_chunk_commits cc
+               JOIN index_chunks ic ON ic.id = cc.chunk_id
+               GROUP BY cc.commit_sha
+               HAVING COUNT(DISTINCT ic.file_path) > 25
+           )
+         GROUP BY 1, 2
+         HAVING COUNT(DISTINCT icc1.commit_sha) >= 2",
+        (file_path.to_string(),),
+    )
+    .await?;
+
+    Ok(())
+}
+
 /// Index a single file. Returns number of new/updated chunks stored (0 = unchanged).
 pub(crate) async fn index_file(
     project_root: &Path,
@@ -299,10 +348,19 @@ pub(crate) async fn index_file(
 
     // Store commit records for history search
     for commit in &commits {
+        let timestamp = chrono::DateTime::from_timestamp(commit.timestamp_unix, 0)
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_default();
         let _ = conn
             .execute(
-                "INSERT OR IGNORE INTO index_commits (sha, message) VALUES (?1, ?2)",
-                (commit.sha.clone(), commit.message.clone()),
+                "INSERT OR IGNORE INTO index_commits (sha, message, author, timestamp) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                (
+                    commit.sha.clone(),
+                    commit.message.clone(),
+                    commit.author.clone(),
+                    timestamp,
+                ),
             )
             .await;
     }
@@ -368,6 +426,14 @@ pub(crate) async fn index_file(
         }
 
         stored += 1;
+    }
+
+    // Incremental file coupling: delete old rows for this file then recompute
+    // from current index_chunk_commits. Only sees indexed files (D5 limitation).
+    // Branch-accumulation accepted (D6): INSERT OR IGNORE on index_chunk_commits
+    // means rebase/squash orphan SHAs linger — acceptable v1 staleness.
+    if git_history {
+        let _ = refresh_file_coupling(conn, &rel_path).await;
     }
 
     upsert_file_hash(conn, &rel_path, &content_hash).await?;

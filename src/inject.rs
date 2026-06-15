@@ -17,7 +17,7 @@ call search(query) first — it searches memory, code, and git history simultane
 Use get_memories(ids) to fetch full content of relevant memory results. \
 Use get_symbol(name) for exact symbol lookups instead of reading files. \
 Use search_memory(query) only when you specifically need memory results without code noise.\n\
-[coree tools] search(query) | search_code(query) | get_symbol(name,[file_path]) | \
+[coree tools] search(query) | search_code(query) | get_symbol(name,[file_path]) | get_file_coupling(file_path) | \
 store_memories(memories:[{content,type,title,[topic_key,importance,tags,facts,source,pinned]}]) | \
 search_memory(query,[limit,detail]) | get_memories(ids) | \
 list_memories([type,tags,limit,detail]) | \

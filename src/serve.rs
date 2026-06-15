@@ -328,6 +328,18 @@ struct MigrateToTursoInput {
     to_turso: Option<String>,
 }
 
+#[serde_as]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct GetCouplingInput {
+    /// File path relative to project root.
+    file_path: String,
+    /// Maximum results to return (default 5).
+    #[serde_as(as = "Option<PickFirst<(_, DisplayFromStr)>>")]
+    #[schemars(with = "Option<usize>")]
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
 // --- Prompt implementations ---
 
 #[prompt_router]
@@ -1040,6 +1052,38 @@ impl CoreeServer {
     }
 
     #[tool(
+        description = "Return top-N files most frequently committed alongside the given file (co-change/coupling graph). Requires git_history enabled. Only includes indexed files."
+    )]
+    async fn get_file_coupling(
+        &self,
+        Parameters(input): Parameters<GetCouplingInput>,
+    ) -> Result<String, String> {
+        if let Some(r) = self.maybe_proxy("get_file_coupling", Some(&input)).await {
+            return r;
+        }
+        let idx = self.try_index_ready()?;
+        let limit = input.limit.unwrap_or(5);
+        let coupled = index::search::get_coupled_files(&idx.conn, &input.file_path, limit)
+            .await
+            .map_err(|e| tool_err(format!("get_coupled_files failed: {e}")))?;
+
+        if coupled.is_empty() {
+            return Ok(format!(
+                "No coupled files found for '{}'. Files must be indexed and share >=2 co-commits (refactor commits >25 files are excluded).",
+                input.file_path
+            ));
+        }
+
+        let n = coupled.len();
+        let mut out = String::new();
+        for (file, shared, ts) in &coupled {
+            out.push_str(&format!("{file} ({shared} shared commits, last {ts})\n"));
+        }
+        out.push_str(&format!("_meta: {{returned: {n}}}\n"));
+        Ok(out)
+    }
+
+    #[tool(
         description = "Search memories, source code, and git history simultaneously. Use this by default. Returns memory results and code results in separate sections."
     )]
     async fn search(&self, Parameters(input): Parameters<SearchInput>) -> Result<String, String> {
@@ -1189,10 +1233,11 @@ impl ServerHandler for CoreeServer {
                  Set source='reviewed' when storing memories during session-start review. \
                  CODE SEARCH: Use search(query) by default to search memories AND code simultaneously. \
                  Use search_code(query) only when you specifically want code/git results without memory noise. \
-                 Use get_symbol(name) for exact symbol lookup — returns signature, git line-range history, hotspot score, and cross-type similar results. \
-                 hotspot_score reflects recent modification frequency (higher = more volatile, treat with more scrutiny). \
-                 Memory tools: store_memories | search_memory | get_memories | list_memories | pin_memories | delete_memories | remote_sync | session_context | diagnose. \
-                 Code tools: search(query) | search_code(query) | get_symbol(name,[file_path])",
+                 Use get_symbol(name) for exact symbol lookup — returns signature, git line-range history, hotspot score, ownership, and cross-type similar results. \
+                  Use get_file_coupling(file_path) to list frequently co-committed files (co-change graph). \
+                  hotspot_score reflects recent modification frequency (higher = more volatile, treat with more scrutiny). \
+                  Memory tools: store_memories | search_memory | get_memories | list_memories | pin_memories | delete_memories | remote_sync | session_context | diagnose. \
+                  Code tools: search(query) | search_code(query) | get_symbol(name,[file_path]) | get_file_coupling(file_path)",
             )
     }
 }

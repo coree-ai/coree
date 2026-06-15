@@ -96,6 +96,16 @@ pub async fn ensure(conn: &Arc<turso::Connection>) -> Result<()> {
             "index_chunk_commits_by_sha",
             "CREATE INDEX IF NOT EXISTS index_chunk_commits_by_sha ON index_chunk_commits (commit_sha)",
         ),
+        (
+            "index_file_coupling",
+            "CREATE TABLE IF NOT EXISTS index_file_coupling (
+             file_a         TEXT NOT NULL,
+             file_b         TEXT NOT NULL,
+             shared_commits INTEGER NOT NULL DEFAULT 0,
+             last_shared_ts TEXT NOT NULL,
+             PRIMARY KEY (file_a, file_b)
+         )",
+        ),
     ];
 
     for (name, stmt) in ddl {

@@ -27,6 +27,8 @@ pub struct CodeResult {
     pub related_commits: Vec<String>,
     /// Number of identical (same body hash) results collapsed into this entry.
     pub duplicate_count: usize,
+    /// File ownership: "author (N commits, last DATE)" strings, ranked by commit count.
+    pub owners: Vec<String>,
 }
 
 /// Hybrid vector + FTS search over indexed code chunks.
@@ -165,6 +167,7 @@ pub async fn search_code(
             rrf_score: rrf_v + rrf_f,
             related_commits: vec![],
             duplicate_count: 0,
+            owners: vec![],
         });
     }
 
@@ -306,6 +309,7 @@ pub async fn get_symbol(
             rrf_score: 0.0,
             related_commits: vec![],
             duplicate_count: 0,
+            owners: vec![],
         });
     }
 
@@ -313,6 +317,90 @@ pub async fn get_symbol(
     let commit_map = fetch_related_commits_batch(conn, &ids, 5).await?;
     for r in &mut results {
         r.related_commits = commit_map.get(&r.id).cloned().unwrap_or_default();
+    }
+
+    // Ownership rollup per unique file (avoids redundant author queries).
+    {
+        let mut seen = std::collections::HashSet::new();
+        let mut file_owners: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for r in &results {
+            if seen.insert(r.file_path.clone()) {
+                let owners = get_file_owners(conn, &r.file_path, 3).await?;
+                file_owners.insert(
+                    r.file_path.clone(),
+                    owners
+                        .into_iter()
+                        .map(|(author, cnt, ts)| format!("{author} ({cnt} commits, last {ts})"))
+                        .collect(),
+                );
+            }
+        }
+        for r in &mut results {
+            r.owners = file_owners.get(&r.file_path).cloned().unwrap_or_default();
+        }
+    }
+    Ok(results)
+}
+
+/// Return a co-change/coupling summary: top-N files frequently committed alongside `file_path`.
+/// Only returns pairs with shared_commits >= 2 (D3 bound). Ordered by shared_commits desc.
+/// Branch-accumulated: orphan SHAs from rebase/squash may contribute stale pairs (v1 accepted).
+pub async fn get_coupled_files(
+    conn: &Arc<turso::Connection>,
+    file_path: &str,
+    limit: usize,
+) -> Result<Vec<(String, i64, String)>> {
+    let mut rows = conn.query(
+        "SELECT
+           CASE WHEN file_a = ?1 THEN file_b ELSE file_a END,
+           shared_commits,
+           last_shared_ts
+         FROM index_file_coupling
+         WHERE (file_a = ?1 OR file_b = ?1) AND shared_commits >= 2
+         ORDER BY shared_commits DESC
+         LIMIT ?2",
+        (file_path.to_string(), limit as i64),
+    ).await?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        results.push((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2).unwrap_or_default(),
+        ));
+    }
+    Ok(results)
+}
+
+/// Per-file ownership rollup: contributors ranked by (commit_count, recency).
+/// Computed from index_commits.author via index_chunk_commits join.
+/// Only sees indexed files (D5 limitation); branch-accumulation accepted (D6).
+pub async fn get_file_owners(
+    conn: &Arc<turso::Connection>,
+    file_path: &str,
+    limit: usize,
+) -> Result<Vec<(String, i64, String)>> {
+    // Filter out unnamed/empty authors (unlikely from proper git but defensive).
+    let mut rows = conn.query(
+        "SELECT c.author, COUNT(*) as cnt, MAX(c.timestamp) as last_ts
+         FROM index_commits c
+         JOIN index_chunk_commits cc ON cc.commit_sha = c.sha
+         JOIN index_chunks ic ON ic.id = cc.chunk_id
+         WHERE ic.file_path = ?1
+           AND c.author IS NOT NULL
+           AND c.author != ''
+         GROUP BY c.author
+         ORDER BY cnt DESC, last_ts DESC
+         LIMIT ?2",
+        (file_path.to_string(), limit as i64),
+    ).await?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        results.push((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2).unwrap_or_default(),
+        ));
     }
     Ok(results)
 }
@@ -380,6 +468,12 @@ pub fn format_result(r: &CodeResult, verbose: bool) -> String {
                 .map(|c| format!("\"{c}\""))
                 .collect::<Vec<_>>()
                 .join(", ")
+        ));
+    }
+    if !r.owners.is_empty() {
+        out.push_str(&format!(
+            "Owners: {}\n",
+            r.owners.join(", ")
         ));
     }
     out
