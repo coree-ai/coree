@@ -7,19 +7,34 @@ on:
       - 'docs/**'
       - '**/*.md'
       - 'npm/**'
-      - 'scripts/**'
   pull_request:
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
       - 'npm/**'
-      - 'scripts/**'
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
+  # Validate shared scripts with node --check and node --test.
+  scripts:
+    name: Scripts (node --check + node:test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Node syntax check
+        run: node --check scripts/*.mjs
+
+      - name: Node tests
+        run: node --test scripts/propagate-coree-pin.test.mjs
+
   # Run tests and clippy on Linux. This is the fast feedback job.
   test:
     name: Test (Linux x86_64)
