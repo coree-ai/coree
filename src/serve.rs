@@ -771,11 +771,27 @@ impl CoreeServer {
             index::IndexState::Failed(msg) => format!("failed: {msg}"),
         };
 
+        let is_primary = self.is_primary.load(Ordering::SeqCst);
+        let ready_file_exists = self.config.serve_ready_path().exists();
+
+        // NOTE: ready_file is removed only on graceful shutdown. If the primary
+        // hard-crashes, the stale file lingers, so a secondary could briefly show
+        // "ready (via primary)" while proxy calls actually fail. Probing the IPC
+        // socket would make this bulletproof but is out of scope for v1.
+        let (role, mem_display, idx_display) = if is_primary {
+            ("primary", db_status.clone(), idx_status.clone())
+        } else if ready_file_exists {
+            ("secondary", "ready (via primary)".to_string(), "ready (via primary)".to_string())
+        } else {
+            ("starting", db_status.clone(), idx_status.clone())
+        };
+
         let log_dir = self.config.db_path().parent().map(|p| p.to_path_buf());
 
         let mut out = format!("coree v{}\n", env!("CARGO_PKG_VERSION"));
-        out.push_str(&format!("memory: {db_status}\n"));
-        out.push_str(&format!("index: {idx_status}\n"));
+        out.push_str(&format!("role: {role}\n"));
+        out.push_str(&format!("memory: {mem_display}\n"));
+        out.push_str(&format!("index: {idx_display}\n"));
         out.push_str(&format!("project: {}\n", self.project_id));
         if let Some(ref dir) = log_dir {
             out.push_str(&format!("log dir: {}\n", dir.display()));
