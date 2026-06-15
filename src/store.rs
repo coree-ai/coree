@@ -213,7 +213,7 @@ pub async fn store_memory(
             Value::Real(importance),
             Value::Text(req.session_id),
             Value::from(req.source),
-            Value::from(pinned_val.map(|v| v as i64)),
+            Value::from(pinned_val),
             Value::Text(now_str.clone()),
             Value::Text(now_str),
             Value::Text(hash.clone()),

@@ -262,12 +262,12 @@ pub fn current_author(repo_root: &Path) -> Option<String> {
             .args(["config", key])
             .output()
             .ok()?;
-        if output.status.success() {
-            if let Ok(s) = std::str::from_utf8(&output.stdout) {
-                let trimmed = s.trim().to_string();
-                if !trimmed.is_empty() {
-                    return Some(trimmed);
-                }
+        if output.status.success()
+            && let Ok(s) = std::str::from_utf8(&output.stdout)
+        {
+            let trimmed = s.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
             }
         }
     }
