@@ -796,18 +796,16 @@ impl CoreeServer {
         if input.ids.is_empty() {
             return Ok("No IDs provided.".to_string());
         }
-        let total = input.ids.len();
-        let action = if input.pin { "Pinned" } else { "Unpinned" };
-        match retrieve::pin_batch(&ready.conn, &input.ids, &self.project_id, input.pin).await {
-            Ok(n) if n as usize == total => Ok(format!("{action} {total} memories")),
-            // turso execute() may return an unreliable count on file-based WAL DBs (upstream bug).
-            // saturating_sub prevents a display underflow; the actual pin operation is correct.
-            Ok(n) => Ok(format!(
-                "{action} {n}/{total} memories ({} not found)",
-                total.saturating_sub(n as usize)
-            )),
-            Err(e) => Err(tool_err(format!("pin_memories failed: {e}"))),
-        }
+        retrieve::pin_batch(&ready.conn, &input.ids, &self.project_id, input.pin)
+            .await
+            .map(|_| {
+                if input.pin {
+                    "Memories pinned.".to_string()
+                } else {
+                    "Memories unpinned.".to_string()
+                }
+            })
+            .map_err(|e| tool_err(format!("pin_memories failed: {e}")))
     }
 
     #[tool(
@@ -839,17 +837,10 @@ impl CoreeServer {
         if input.ids.is_empty() {
             return Ok("No IDs provided.".to_string());
         }
-        let total = input.ids.len();
-        match retrieve::delete_batch(&ready.conn, &input.ids, &self.project_id).await {
-            Ok(n) if n as usize == total => Ok(format!("Deleted {total} memories")),
-            // turso execute() may return an unreliable count on file-based WAL DBs (upstream bug).
-            // saturating_sub prevents a display underflow; the actual delete operation is correct.
-            Ok(n) => Ok(format!(
-                "Deleted {n}/{total} memories ({} not found)",
-                total.saturating_sub(n as usize)
-            )),
-            Err(e) => Err(tool_err(format!("delete_memories failed: {e}"))),
-        }
+        retrieve::delete_batch(&ready.conn, &input.ids, &self.project_id)
+            .await
+            .map(|_| "Memories deleted.".to_string())
+            .map_err(|e| tool_err(format!("delete_memories failed: {e}")))
     }
 
     #[tool(
@@ -955,6 +946,7 @@ impl CoreeServer {
         out.push_str(&format!("memory: {mem_display}\n"));
         out.push_str(&format!("index: {idx_display}\n"));
         out.push_str(&format!("project: {}\n", self.project_id));
+        out.push_str(&format!("project root: {}\n", self.config.project_root().display()));
         if let Some(ref dir) = log_dir {
             out.push_str(&format!("log dir: {}\n", dir.display()));
         }
@@ -1111,11 +1103,18 @@ impl CoreeServer {
             // Append symbol-level commit history from git log -L (line range tracking)
             if idx.git_history && r.line_start > 0 {
                 let commits = tokio::task::spawn_blocking({
-                    let root = idx.project_root.clone();
-                    let fp = r.file_path.clone();
+                    let abs_path = idx.project_root.join(&r.file_path);
                     let ls = r.line_start as usize;
                     let le = r.line_end as usize;
-                    move || index::git::symbol_commits(&root, &fp, ls, le, 8)
+                    move || {
+                        let git_root = index::git::resolve_git_root(&abs_path);
+                        let git_rel = abs_path
+                            .strip_prefix(&git_root)
+                            .unwrap_or(&abs_path)
+                            .to_string_lossy()
+                            .to_string();
+                        index::git::symbol_commits(&git_root, &git_rel, ls, le, 8)
+                    }
                 })
                 .await
                 .unwrap_or_default();
@@ -2078,6 +2077,43 @@ mod tests {
         }
     }
 
+    async fn make_ready_server(session_id: &str, config: Config) -> (CoreeServer, Arc<turso::Connection>) {
+        let db = turso::Builder::new_local(":memory:")
+            .build()
+            .await
+            .expect("in-memory db");
+        let conn = Arc::new(db.connect().expect("connect"));
+        migrations::run(&conn).await.expect("migrations");
+
+        let embedder = Arc::new(Mutex::new(Embedder::load().expect("embedder")));
+        let db_ready = Arc::new(DbReady {
+            conn: Arc::clone(&conn),
+            embedder,
+            write_lock: store::new_write_lock(),
+            handle: db::AnyDb::Local(db),
+            temp_dir: None,
+        });
+        let (db_tx, db_rx) = tokio::sync::watch::channel(DbState::Ready(db_ready));
+        let (_idx_tx, idx_rx) = tokio::sync::watch::channel(index::IndexState::Disabled);
+
+        let server = CoreeServer {
+            db: db_rx,
+            idx: idx_rx,
+            write_lock: store::new_write_lock(),
+            session_id: session_id.to_string(),
+            project_id: config.project_id.clone().unwrap_or_default(),
+            config: Arc::new(config),
+            is_primary: Arc::new(AtomicBool::new(true)),
+            cross_session: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            tool_router: CoreeServer::tool_router(),
+            prompt_router: CoreeServer::prompt_router(),
+        };
+
+        // keep db_tx alive so the watch channel stays Ready
+        std::mem::forget(db_tx);
+        (server, conn)
+    }
+
     async fn setup_memories_table(conn: &Arc<turso::Connection>) {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS memories (
@@ -2271,5 +2307,86 @@ mod tests {
 
         let block2 = server.cross_session_block(&conn).await;
         assert!(block2.is_none(), "no more after marking all as seen");
+    }
+
+    // --- pin_memories handler messages ---
+
+    #[tokio::test]
+    async fn pin_memories_returns_pinned_message() {
+        let config = make_config();
+        let (server, conn) = make_ready_server("test-session", config).await;
+        seed_memory_for_pin(&conn, "id-a", "test-project").await;
+
+        let input = PinMemoriesInput {
+            ids: vec!["id-a".to_string()],
+            pin: true,
+        };
+        let result = server.pin_memories(Parameters(input)).await;
+        assert_eq!(result, Ok("Memories pinned.".to_string()));
+    }
+
+    #[tokio::test]
+    async fn pin_memories_returns_unpinned_message() {
+        let config = make_config();
+        let (server, conn) = make_ready_server("test-session", config).await;
+        seed_memory_for_pin(&conn, "id-a", "test-project").await;
+
+        let input = PinMemoriesInput {
+            ids: vec!["id-a".to_string()],
+            pin: false,
+        };
+        let result = server.pin_memories(Parameters(input)).await;
+        assert_eq!(result, Ok("Memories unpinned.".to_string()));
+    }
+
+    // --- delete_memories handler messages ---
+
+    #[tokio::test]
+    async fn delete_memories_returns_deleted_message() {
+        let config = make_config();
+        let (server, conn) = make_ready_server("test-session", config).await;
+        seed_memory_for_pin(&conn, "id-a", "test-project").await;
+
+        let input = DeleteMemoriesInput {
+            ids: vec!["id-a".to_string()],
+        };
+        let result = server.delete_memories(Parameters(input)).await;
+        assert_eq!(result, Ok("Memories deleted.".to_string()));
+    }
+
+    // --- empty-input guards ---
+
+    #[tokio::test]
+    async fn pin_memories_empty_ids_returns_no_ids() {
+        let config = make_config();
+        let (server, _conn) = make_ready_server("test-session", config).await;
+
+        let input = PinMemoriesInput {
+            ids: vec![],
+            pin: true,
+        };
+        let result = server.pin_memories(Parameters(input)).await;
+        assert_eq!(result, Ok("No IDs provided.".to_string()));
+    }
+
+    #[tokio::test]
+    async fn delete_memories_empty_ids_returns_no_ids() {
+        let config = make_config();
+        let (server, _conn) = make_ready_server("test-session", config).await;
+
+        let input = DeleteMemoriesInput { ids: vec![] };
+        let result = server.delete_memories(Parameters(input)).await;
+        assert_eq!(result, Ok("No IDs provided.".to_string()));
+    }
+
+    async fn seed_memory_for_pin(conn: &turso::Connection, id: &str, project_id: &str) {
+        conn.execute(
+            "INSERT INTO memories \
+             (id, project_id, type, title, content, created_at, updated_at, content_hash) \
+             VALUES (?1, ?2, 'fact', 'Title', 'Content', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'hash')",
+            (id.to_string(), project_id.to_string()),
+        )
+        .await
+        .unwrap();
     }
 }

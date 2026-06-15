@@ -334,11 +334,17 @@ pub(crate) async fn index_file(
 
     // Fetch git commits once and reuse for churn_count, hotspot_score, commit storage, and chunk linking.
     let (commits, hotspot_score) = if git_history {
-        let root = project_root.to_path_buf();
-        let rel = rel_path.clone();
-        let stats =
-            tokio::task::spawn_blocking(move || git::file_commits_with_stats(&root, &rel, 10))
-                .await?;
+        let abs_path = file_path.to_path_buf();
+        let stats = tokio::task::spawn_blocking(move || {
+            let git_root = git::resolve_git_root(&abs_path);
+            let git_rel = abs_path
+                .strip_prefix(&git_root)
+                .unwrap_or(&abs_path)
+                .to_string_lossy()
+                .to_string();
+            git::file_commits_with_stats(&git_root, &git_rel, 10)
+        })
+        .await?;
         let score = git::compute_hotspot_score(&stats);
         (stats, score)
     } else {

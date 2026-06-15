@@ -1,10 +1,55 @@
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub struct CommitInfo {
     pub sha: String,
     pub message: String,
+}
+
+/// Resolve the git toplevel that actually tracks a file, handling nested repos.
+/// Runs `git -C <file_dir> rev-parse --show-toplevel` to find the canonical git root.
+/// Falls back to `file_path` if resolution fails (caller uses whatever root it has).
+///
+/// Uses a static cache keyed by the file's parent directory to avoid repeated
+/// `git rev-parse` invocations for files in the same subtree.
+pub fn resolve_git_root(file_path: &Path) -> PathBuf {
+    static CACHE: std::sync::LazyLock<Mutex<HashMap<PathBuf, Option<PathBuf>>>> =
+        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    let parent = match file_path.parent() {
+        Some(p) => p.to_path_buf(),
+        None => return file_path.to_path_buf(),
+    };
+
+    {
+        let cache = CACHE.lock().unwrap();
+        if let Some(cached) = cache.get(&parent) {
+            return cached.clone().unwrap_or(parent);
+        }
+    }
+
+    let resolved = Command::new("git")
+        .arg("-C")
+        .arg(&parent)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                let s = String::from_utf8(o.stdout).ok()?;
+                let p = PathBuf::from(s.trim());
+                if p.exists() { Some(p) } else { None }
+            } else {
+                None
+            }
+        });
+
+    let mut cache = CACHE.lock().unwrap();
+    cache.insert(parent.clone(), resolved.clone());
+    resolved.unwrap_or(parent)
 }
 
 /// Extended commit info with timestamp, author, and change size for hotspot scoring.
@@ -367,5 +412,39 @@ mod tests {
         assert!(!is_significant("bumping all deps to latest versions"));
         // But a commit that merely contains the word mid-sentence is fine
         assert!(is_significant("fix: don't revert index on partial failure"));
+    }
+
+    // --- resolve_git_root ---
+
+    #[test]
+    fn resolve_git_root_returns_toplevel_for_tracked_file() {
+        // This test file lives in a real git repo (the coree project itself).
+        let file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("index")
+            .join("git.rs");
+        let root = super::resolve_git_root(&file);
+        assert!(root.join(".git").exists(), "should resolve to a git toplevel");
+    }
+
+    #[test]
+    fn resolve_git_root_returns_parent_for_non_tracked_file() {
+        // A file outside any git repo falls back to its parent directory.
+        let file = std::path::PathBuf::from("/tmp/nonexistent/file.txt");
+        let root = super::resolve_git_root(&file);
+        assert_eq!(root, std::path::PathBuf::from("/tmp/nonexistent"));
+    }
+
+    #[test]
+    fn resolve_git_root_caches_result() {
+        // Two calls for files in the same directory should hit the cache.
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("index");
+        let file1 = dir.join("git.rs");
+        let file2 = dir.join("search.rs");
+        let root1 = super::resolve_git_root(&file1);
+        let root2 = super::resolve_git_root(&file2);
+        assert_eq!(root1, root2, "same directory should cache the same git root");
     }
 }
