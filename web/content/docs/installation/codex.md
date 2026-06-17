@@ -10,7 +10,7 @@ coree supports OpenAI Codex via the Codex plugin system.
 ## Install
 
 ```bash
-codex plugin marketplace add coree-ai/codex --ref main
+codex plugin marketplace add coree-ai/codex
 codex plugin add coree@coree
 ```
 
