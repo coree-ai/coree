@@ -10,22 +10,24 @@ coree supports OpenAI Codex via the Codex plugin system.
 ## Install
 
 ```bash
-codex plugin marketplace add github:coree-ai/codex
-codex plugin install coree
+codex plugin marketplace add coree-ai/codex --ref main
+codex plugin add coree@coree
 ```
 
-The first command registers the marketplace source. The second installs the plugin into Codex's plugin cache, which registers the coree MCP server.
+The first command registers the marketplace source from GitHub. The second installs the plugin into Codex's plugin cache, which registers the coree MCP server and hooks.
 
 ## Sandbox configuration
 
-Codex sandboxes MCP server processes. coree needs network access (for first-run model download and remote sync) and filesystem write access (for its database and model cache). Add this to `~/.codex/config.toml`, substituting your username:
+Codex sandboxes MCP server processes. coree needs network access (for first-run model download and remote sync) and filesystem write access (for its database, model cache, and npx cache). Add this to `~/.codex/config.toml`, substituting your username:
 
 ```toml
 [sandbox_workspace_write]
 network_access = true
 writable_roots = [
   "/home/you/.cache/coree",
-  "/home/you/.local/share/coree"
+  "/home/you/.local/share/coree",
+  "/home/you/.npm/_npx",
+  "/home/you/.npm/_cacache"
 ]
 ```
 
@@ -36,27 +38,20 @@ Use absolute paths - `~` expansion is not reliable in TOML.
 The plugin does not automatically place a context file. Copy `AGENTS.md` to your project root so the agent loads coree usage instructions:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/coree-ai/codex/main/AGENTS.md -o AGENTS.md
+curl -fsSL https://raw.githubusercontent.com/coree-ai/codex/main/plugins/coree/AGENTS.md -o AGENTS.md
 ```
 
 `AGENTS.md` is Codex's equivalent of `CLAUDE.md`. It covers the primary `search()` entry point, memory hygiene guidelines, and tool descriptions.
 
 ## Hooks
 
-Codex does not yet support installing hooks from plugins. To enable automatic context injection, add the following to `~/.codex/config.toml`:
-
-```toml
-[hooks.SessionStart]
-command = "npx --yes @coree-ai/coree@0.15.0 inject --type session"
-
-[hooks.UserPromptSubmit]
-command = "npx --yes @coree-ai/coree@0.15.0 inject --type prompt"
-```
+The plugin bundles hooks automatically. Codex asks you to review and trust command hooks before they run; use `/hooks` after installing or updating the plugin.
 
 | Hook | Purpose |
 |------|---------|
-| `SessionStart` | Injects stale notes and session context at the start of each session |
+| `SessionStart` | Injects stale notes and session context at the start of each session and after compaction |
 | `UserPromptSubmit` | Injects relevant memories before each user prompt (up to 8 000 tokens) |
+| `Stop` | Currently returns an empty JSON response while stop-continuation behavior is verified |
 
 Without these hooks, coree still works as an MCP server - you can call tools manually. The hooks add automatic context injection equivalent to the Claude Code and Gemini CLI integrations.
 
@@ -65,6 +60,9 @@ Without these hooks, coree still works as an MCP server - you can call tools man
 The plugin installs to `~/.codex/plugins/cache/coree/coree/<version>/`:
 
 - **`.mcp.json`** - registers the MCP server: `npx --yes @coree-ai/coree@<version> serve`
+- **`hooks/hooks.json`** - wires lifecycle hooks for automatic context injection
+- **`AGENTS.md`** - optional agent usage instructions
+- **`.codex-plugin/plugin.json`** - plugin metadata and version pin
 
 The binary is fetched via npx on first use and cached in `~/.npm/_npx/`.
 
