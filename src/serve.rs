@@ -402,6 +402,9 @@ struct SearchInput {
     #[schemars(with = "Option<usize>")]
     #[serde(default)]
     limit: Option<usize>,
+    /// If true, emit compact one-line results (for inject path). The explicit MCP tool omits this.
+    #[serde(default)]
+    compact: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -1306,8 +1309,14 @@ impl CoreeServer {
             items.push((r.score, crate::format::compact_single(r)));
         }
         for r in &code_results {
-            let mut s = index::search::format_result(r, true);
-            s.push_str("---\n");
+            let mut s = if input.compact {
+                index::search::format_result_compact(r)
+            } else {
+                index::search::format_result(r, true)
+            };
+            if !input.compact {
+                s.push_str("---\n");
+            }
             items.push((r.rrf_score, s));
         }
 
@@ -2096,6 +2105,7 @@ mod tests {
         let search = SearchInput {
             query: "q".to_string(),
             limit: Some(7),
+            compact: false,
         };
         assert_eq!(roundtrip(&search).limit, Some(7));
     }

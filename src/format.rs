@@ -38,8 +38,13 @@ pub fn compact_single(r: &CompactResult) -> String {
     let date = r.created_at.get(..10).unwrap_or(&r.created_at);
     let stale = if r.is_stale { "[stale?] " } else { "" };
     format!(
-        "{stale}[{:<18} {:.2}] {:.3}  {}  {}  ~{}c  {}\n",
-        r.memory_type, r.importance, r.score, r.id, date, r.content_len, r.title
+        "{stale}[{memory_type} {importance:.2}] {score:.3}  {id}  {date}  {title}\n",
+        memory_type = r.memory_type,
+        importance = r.importance,
+        score = r.score,
+        id = r.id,
+        date = date,
+        title = r.title
     )
 }
 

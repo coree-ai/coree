@@ -5,7 +5,7 @@ use turso::Connection;
 
 use crate::{config::Config, request, retrieve};
 
-const INSTRUCTIONS: &str = "[coree] Store every decision, discovery, gotcha, failure, and unexpected outcome. \
+const SESSION_PREFIX: &str = "[coree] Store every decision, discovery, gotcha, failure, and unexpected outcome. \
 Err on the side of storing - use importance (0.0-1.0) to signal value, not omission. \
 Failures and unexpected outcomes: type='gotcha', importance >= 0.8. \
 When you find a bug: store it as gotcha before writing the fix. \
@@ -23,6 +23,10 @@ search_memory(query,[limit,detail]) | get_memories(ids) | \
 list_memories([type,tags,limit,detail]) | \
 pin_memories(ids,pin) | delete_memories(ids) | \
 list_stale_memories() | evict_stale_memories() | session_context()\n";
+
+const PROMPT_PREFIX: &str = "[coree] Before reading files not yet examined this session, \
+use search(query) (memories + code + git history) and get_symbol(name) for exact symbols. \
+Related context:\n";
 
 /// The three observable states of `coree serve` from inject's perspective.
 pub enum ServeState {
@@ -208,7 +212,10 @@ async fn run_inner(
                 total_ms = t_total.elapsed().as_millis(),
                 "inject via IPC done"
             );
-            print_within_budget(&format!("{INSTRUCTIONS}{results}"), budget);
+            let trimmed = results.trim_start();
+            if !results.trim().is_empty() && !trimmed.starts_with("No results found") {
+                print_within_budget(&format!("{PROMPT_PREFIX}{results}"), budget);
+            }
             return Ok(());
         }
         tracing::debug!(
@@ -225,7 +232,7 @@ async fn run_inner(
             // Prompt type already handled above via socket delegation.
             if inject_type == "session" || inject_type == "compact" {
                 println!(
-                    "{INSTRUCTIONS}[coree] MCP server is running — memory context is available via tools. \
+                    "{SESSION_PREFIX}[coree] MCP server is running — memory context is available via tools. \
                      Use search_memory / list_memories for context retrieval this session."
                 );
             }

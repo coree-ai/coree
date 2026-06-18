@@ -31,7 +31,7 @@ pub async fn call_search(
     limit: usize,
     timeout_ms: u64,
 ) -> Option<String> {
-    let args = serde_json::json!({"query": query, "limit": limit}).to_string();
+    let args = serde_json::json!({"query": query, "limit": limit, "compact": true}).to_string();
     let fut = call_tool_on_server(config, "search", Some(&args));
     with_timeout(fut, timeout_ms).await
 }

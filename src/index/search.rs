@@ -479,6 +479,14 @@ pub fn format_result(r: &CodeResult, verbose: bool) -> String {
     out
 }
 
+/// Compact one-line code result for the inject path.
+pub fn format_result_compact(r: &CodeResult) -> String {
+    format!(
+        "[{}] {:.3}  {}:{}  {}\n",
+        r.symbol_kind, r.rrf_score, r.file_path, r.line_start, r.qualified_name
+    )
+}
+
 pub(crate) fn build_fts_query(query: &str) -> String {
     // Tantivy query syntax: bare `token*` for prefix match.
     // Operators (AND/OR/NOT) are uppercase in Tantivy, so lowercase terms are safe.
