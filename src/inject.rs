@@ -141,26 +141,10 @@ async fn run_inner(
     let cwd = env::current_dir()?;
     let config = Config::load(&cwd)?;
 
-    // No project_id means no config or config without project_id. Skip all DB work
-    // so no DB is opened. On session/compact types, emit a message so
-    // the AI can surface the setup instructions to the user.
-    if config.project_id.is_none() {
-        if inject_type == "session" || inject_type == "compact" {
-            let suggested = crate::project_id::infer(config.project_root());
-            println!(
-                "[coree] coree has loaded, but there is no `.coree.toml` configuration \
-                 file for this project, so memories will not be stored or retrieved this \
-                 session.\n\
-                 Inform the user of this. Offer to set up coree by creating a \
-                 `.coree.toml` file. Suggested configuration:\n\n\
-                 ```toml\n\
-                 project_id = \"{suggested}\"\n\
-                 ```\n\
-                 Ask the user whether to use this value or a different project_id."
-            );
-        }
-        return Ok(());
-    }
+    // Memory is on by default with zero configuration: when `.coree.toml` is absent
+    // (config.project_id is None), the serve process resolves a project_id automatically
+    // via git remote, then canonical path (see project_id::resolve). No setup prompt is
+    // emitted — inject proceeds exactly as it would with an explicit project_id.
 
     // Check for a crash log written by a previous `coree serve` session.
     // Output to stdout so it lands in additionalContext before any memory content.

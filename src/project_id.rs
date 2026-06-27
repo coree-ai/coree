@@ -24,20 +24,6 @@ pub fn resolve(project_root: &Path, config_value: Option<&str>) -> String {
     log_and_return("unknown".to_string(), "fallback")
 }
 
-/// Infer a project ID from the filesystem without logging.
-/// Same fallback chain as `resolve` but skips the config_value check.
-/// Used by `Config::load` to seed a new `.coree.toml` without producing a
-/// double log line (resolve is called again after load with the written value).
-pub fn infer(project_root: &Path) -> String {
-    if let Some(slug) = git_remote_slug(project_root) {
-        return slug;
-    }
-    if let Ok(canonical) = project_root.canonicalize() {
-        return canonical.to_string_lossy().replace('\\', "/");
-    }
-    "unknown".to_string()
-}
-
 /// Read `.git/config` under `project_root` and return a normalised slug for the
 /// `origin` remote URL, or `None` if no remote is found.
 ///
