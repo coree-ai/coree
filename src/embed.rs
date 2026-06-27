@@ -44,6 +44,20 @@ impl Embedder {
                 .context("COREE_FORCE_MODEL_REFRESH: failed to remove model cache")?;
         }
 
+        // Serialize first-time model downloads across every coree process on this
+        // machine. The model cache is global (shared by all projects), but each
+        // project's `serve` elects its own primary and loads the embedder
+        // independently, so two cold-start serves in different projects would race
+        // on hf-hub's per-blob download lock -- which is non-blocking with only a
+        // ~5s retry budget (hf-hub-0.5.0 api/sync.rs) -- and the loser fails with
+        // "Lock acquisition failed". A machine-global blocking advisory lock makes
+        // the loser wait for the winner's download, then load from the warm cache.
+        //
+        // Held only for the duration of this load() call (released when the guard
+        // drops). Best-effort: if the lock can't be taken (e.g. read-only FS) we
+        // proceed unlocked rather than failing the load.
+        let _download_guard = acquire_download_lock(&cache_dir);
+
         let model = TextEmbedding::try_new(
             InitOptions::new(MODEL)
                 .with_cache_dir(cache_dir)
@@ -70,6 +84,33 @@ impl Embedder {
             .next()
             .context("Embedding model returned no results")
     }
+}
+
+/// Acquire a machine-global advisory lock that serializes model downloads across
+/// coree processes. Returns the locked file handle as a guard; the lock is released
+/// when it is dropped.
+///
+/// Crash-safe on all platforms: this is an OS advisory lock bound to the open file
+/// handle (`File::lock` -> `flock` on unix, `LockFileEx` on windows), so the kernel
+/// releases it automatically on any process exit, including a crash. The on-disk
+/// `.download.lock` file is therefore inert if left behind and never needs manual
+/// cleanup -- the same primitive coree already uses for `serve.lock`.
+///
+/// Best-effort: any failure to create the dir, open the file, or take the lock
+/// returns `None`, leaving the caller to proceed without coordination.
+fn acquire_download_lock(cache_dir: &std::path::Path) -> Option<std::fs::File> {
+    std::fs::create_dir_all(cache_dir).ok()?;
+    let lock_path = cache_dir.join(".download.lock");
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)
+        .ok()?;
+    // Blocking exclusive lock: a concurrent cold-start waits here until the process
+    // currently downloading finishes, then proceeds against the now-warm cache.
+    file.lock().ok()?;
+    Some(file)
 }
 
 /// Encode a float slice as a little-endian byte blob for libsql vector storage.

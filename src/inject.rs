@@ -241,8 +241,7 @@ async fn run_inner(
 const STOP_INSTRUCTIONS: &str = "[coree] End of turn checkpoint - store anything worth keeping before moving on:\n\
 - Found a bug or unexpected behavior?     -> store_memory type=gotcha importance>=0.8\n\
 - Understood how a subsystem works?       -> store_memory type=how-it-works\n\
-- Made a design or implementation choice? -> store_memory type=decision\n\
-
+- Made a design or implementation choice? -> store_memory type=decision\n\n\
 Store inline as you work - do not defer to end of session.";
 
 // Fires on every Claude response completion. Outputs a checkpoint prompt - no DB query.

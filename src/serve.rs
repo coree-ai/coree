@@ -2054,6 +2054,21 @@ fn format_full_memory(m: &retrieve::FullMemory) -> String {
 mod tests {
     use super::*;
 
+    /// Shared embedder for all tests in this binary.
+    ///
+    /// `cargo test` runs tests in parallel; on a cold model cache the first-time
+    /// download takes a non-blocking exclusive lock on the model blob (via hf-hub).
+    /// If several tests call `Embedder::load()` at once, the losers of that lock race
+    /// fail with "Lock acquisition failed". The documented fastembed pattern is to
+    /// construct the model once and reuse it, so load it exactly once here (OnceLock
+    /// serializes the init) and hand every test a clone of the same `Arc`.
+    fn shared_embedder() -> Arc<Mutex<Embedder>> {
+        static EMBEDDER: std::sync::OnceLock<Arc<Mutex<Embedder>>> = std::sync::OnceLock::new();
+        EMBEDDER
+            .get_or_init(|| Arc::new(Mutex::new(Embedder::load().expect("embedder"))))
+            .clone()
+    }
+
     // maybe_proxy serializes the typed tool input and the primary re-deserializes it
     // with the same serde_as rules. These structs use serde_as deserialize helpers
     // (PickFirst/JsonString/DisplayFromStr) that accept both native and string forms;
@@ -2142,7 +2157,7 @@ mod tests {
         let conn = Arc::new(db.connect().expect("connect"));
         migrations::run(&conn).await.expect("migrations");
 
-        let embedder = Arc::new(Mutex::new(Embedder::load().expect("embedder")));
+        let embedder = shared_embedder();
         let db_ready = Arc::new(DbReady {
             conn: Arc::clone(&conn),
             embedder,
