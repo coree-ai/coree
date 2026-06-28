@@ -45,6 +45,10 @@ jobs:
         run: |
           export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
           echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          # Key rust-cache on the actual C toolchain so any future Xcode/clang
+          # change auto-invalidates it (a stale cache bakes the old compiler-rt
+          # -L path and breaks the link even when the new toolchain is correct).
+          echo "XCODE_CACHE_KEY=$(xcrun clang --version | shasum | cut -c1-12)" >> "$GITHUB_ENV"
           echo "xcode-select -p: $(xcode-select -p)"
           echo "xcrun clang:     $(xcrun -f clang)"
           RES="$(xcrun clang -print-resource-dir)"
@@ -57,7 +61,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ matrix.target }}
+          key: release-${{ matrix.target }}-xc${{ env.XCODE_CACHE_KEY }}
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
