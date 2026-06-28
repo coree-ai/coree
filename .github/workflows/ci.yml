@@ -99,15 +99,20 @@ jobs:
 
       # macos-latest's default Xcode (16.4) intermittently ships an incomplete
       # clang toolchain, so rustc's -nodefaultlibs link of libclang_rt.osx fails
-      # with "ld: library 'clang_rt.osx' not found". Pin an explicit known-good
-      # Xcode: 'latest-stable' is non-deterministic - it resolved to a 26.6 RC on
-      # some runners, which left xcode-select falling back to the broken 16.4
-      # toolchain. 26.3 links clean. No-op on non-macOS legs.
-      - name: Pin Xcode (macOS)
+      # with "ld: library 'clang_rt.osx' not found". rustc's clang is an xcrun
+      # trampoline selected by DEVELOPER_DIR (not MD_APPLE_SDK_ROOT, which is why
+      # setup-xcode did not help). Point DEVELOPER_DIR at a complete Xcode and
+      # log the resolved toolchain. No-op on non-macOS legs.
+      - name: Select Xcode toolchain (macOS)
         if: runner.os == 'macOS'
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: '26.3'
+        run: |
+          export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          echo "xcode-select -p: $(xcode-select -p)"
+          echo "xcrun clang:     $(xcrun -f clang)"
+          RES="$(xcrun clang -print-resource-dir)"
+          echo "resource-dir:    $RES"
+          ls -l "$RES/lib/darwin/libclang_rt.osx.a" || echo "MISSING libclang_rt.osx.a"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
