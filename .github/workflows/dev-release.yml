@@ -41,6 +41,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # macos-latest's default Xcode (16.4) intermittently ships an incomplete
+      # clang toolchain on the runner image, so rustc's -nodefaultlibs link of
+      # libclang_rt.osx fails ~half the time. Pin a known-good Xcode for a
+      # deterministic toolchain. No-op on non-macOS legs.
+      - name: Pin Xcode (macOS)
+        if: runner.os == 'macOS'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
