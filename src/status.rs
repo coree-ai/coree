@@ -17,7 +17,9 @@ pub async fn run(config: &Config) -> Result<()> {
         ServeState::NotRunning => {}
     }
 
-    let db = Db::open(config).await
+    // Reached only in ServeState::NotRunning (bailed above otherwise), so no serve
+    // owns the replica files; allow recovery (back up + re-pull) if unopenable.
+    let db = Db::open(config, true).await
         .context("Failed to open database")?;
     let conn = db.conn;
     migrations::run(&conn).await?;

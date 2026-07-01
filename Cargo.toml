@@ -10,7 +10,12 @@ description = "Persistent memory and code intelligence for AI agents, backed by 
 rmcp = { version = "1.7.0", features = ["server", "client", "transport-io"] }
 
 # Database - pure Rust SQLite engine with Turso sync
-turso = { version = "0.6.0", features = ["sync"] }
+turso = { version = "0.7.0-pre.14", features = ["sync"] }
+
+# Turso 0.7's sync stack pulls rustls without enabling a crypto-provider feature,
+# so rustls cannot auto-select a process-level CryptoProvider and panics on the
+# first TLS handshake. Enable the `ring` provider and install it explicitly in main.
+rustls = { version = "0.23.40", features = ["ring"] }
 
 # Local ONNX embeddings (bge-small-en-v1.5)
 fastembed = { version = "5.13.4", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }

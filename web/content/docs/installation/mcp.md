@@ -11,7 +11,7 @@ coree runs as a stdio MCP server. Any MCP-compatible agent or client can connect
 
 The `npx` command downloads the `@coree-ai/coree` npm package on first use and selects the correct platform binary for your OS and architecture. The package's `optionalDependencies` declare four platform-specific packages (`coree-linux-x64`, `coree-linux-arm64`, `coree-darwin-arm64`, `coree-win32-x64`). npm installs only the one matching your system, so the correct binary is available immediately. No global install or manual binary download is required.
 
-The first invocation downloads and caches the package in `~/.npm/_npx/`. Subsequent invocations use the cache and start quickly (typically < 200 ms).
+The first invocation downloads and caches the package in `~/.npm/_npx/` (Linux/macOS) or `%LocalAppData%\npm-cache\_npx\` (Windows). Subsequent invocations use the cache and start quickly (typically < 200 ms).
 
 ## MCP server config
 
@@ -93,8 +93,14 @@ coree works best when the agent knows when to call its tools. For agents that lo
 If your agent supports one of these files, copy the generic instructions:
 
 ```bash
+# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/coree-ai/coree/main/INSTRUCTIONS.md \
   -o AGENTS.md
+```
+
+```powershell
+# Windows (PowerShell)
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/coree-ai/coree/main/INSTRUCTIONS.md" -OutFile AGENTS.md
 ```
 
 This file tells the agent to call `search()` before reading files, to store memories with `store_memories()`, and how to use each tool. Agents that auto-detect project-root context files will pick it up automatically.
@@ -156,6 +162,14 @@ coree determines the project root by walking up from the current working directo
 }
 ```
 
+On Windows, use a backslash path:
+
+```json
+"env": {
+  "COREE__PROJECT_ROOT": "C:\\Users\\you\\projects\\my-project"
+}
+```
+
 When do you need this? Signs that the project root is wrong:
 - `diagnose()` reports "no project" or a directory you do not recognize
 - Memories from other projects appear in search results
@@ -203,9 +217,16 @@ coree implements MCP 2024-11-05. It uses stdio transport only. HTTP/SSE transpor
 If your agent does not support MCP at all, coree can still be used as a memory bank through its CLI interface:
 
 ```bash
+# Linux / macOS
 npx --yes @coree-ai/coree@0.16.0 search "deployment checklist"
 npx --yes @coree-ai/coree@0.16.0 store --type decision --title "Architecture choice" --content "..."
 
 # Run the server in single-turn mode for scripting
 npx --yes @coree-ai/coree@0.16.0 serve --single-turn '{"method":"tools/call","params":{"name":"search","arguments":{"query":"rate limiting"}}}'
+```
+
+```powershell
+# Windows (PowerShell)
+npx --yes @coree-ai/coree@0.16.0 search "deployment checklist"
+npx --yes @coree-ai/coree@0.16.0 store --type decision --title "Architecture choice" --content "..."
 ```

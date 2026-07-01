@@ -70,3 +70,29 @@ call the diagnose tool
 ```
 
 The `diagnose` MCP tool reports server state, database status, and any initialisation errors.
+
+## Troubleshooting
+
+**`claude plugin update coree` reports "already at latest version" after a new release:**
+Claude Code maintains a private npm cache at `~/.claude/plugins/npm-cache/` (Linux/macOS) or `%USERPROFILE%\.claude\plugins\npm-cache\` (Windows) that is not automatically invalidated. Clear the cache and reinstall:
+
+```bash
+# Linux / macOS
+rm -rf ~/.claude/plugins/npm-cache
+rm -rf ~/.claude/plugins/cache/coree
+
+# Windows (PowerShell)
+Remove-Item -Recurse -Force "$env:USERPROFILE\.claude\plugins\npm-cache"
+Remove-Item -Recurse -Force "$env:USERPROFILE\.claude\plugins\cache\coree"
+```
+
+Then run `claude plugin update coree` again. This is a known Claude Code bug (issues #37670, #33253).
+
+**Server starts but times out on first use:**
+First-run downloads the platform binary and embedding model, which can take 30-90 seconds. Wait for the download to complete - subsequent starts are fast.
+
+**Hooks do not fire:**
+Check that the plugin config files are present in the plugin cache. Run `claude plugin list` to verify the plugin is installed and enabled.
+
+**npx hangs or fails:**
+Ensure Node.js 18+ is installed. Check that your network allows npm registry access (`registry.npmjs.org`).

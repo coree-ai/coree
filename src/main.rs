@@ -82,6 +82,12 @@ enum RemoteCommand {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Turso 0.7's sync stack builds rustls without a crypto-provider feature, so
+    // rustls cannot auto-select a provider and panics on the first TLS handshake.
+    // Install one explicitly before any network connection. Ignore the Err that
+    // results if a provider is somehow already installed.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let cli = Cli::parse();
 
     match cli.command {

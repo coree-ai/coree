@@ -42,11 +42,26 @@ These run `npx --yes @coree-ai/coree@<version> inject ...` and prepend the outpu
 
 Gemini CLI **redacts sensitive environment variables** (like `TOKEN`, `AUTH`, or `SECRET`) by default when passing them to extensions.
 
-To use remote storage, you must have your `COREE__MEMORY__REMOTE_AUTH_TOKEN` available in your shell environment (e.g., via `export` or a `.env` file). The coree extension is pre-configured to allow these specific variables to pass through the redaction filter.
+To use remote storage, you must have your `COREE__MEMORY__REMOTE_AUTH_TOKEN` available in your shell environment. The coree extension is pre-configured to allow these variables to pass through the redaction filter.
+
+```bash
+# Linux / macOS (bash/zsh)
+export COREE__MEMORY__REMOTE_AUTH_TOKEN=your-token
+export COREE__MEMORY__REMOTE_URL=libsql://your-db.turso.io
+```
+
+```powershell
+# Windows (PowerShell)
+$env:COREE__MEMORY__REMOTE_AUTH_TOKEN = "your-token"
+$env:COREE__MEMORY__REMOTE_URL = "libsql://your-db.turso.io"
+```
 
 ### Configuration via settings.json
 
-Alternatively, you can explicitly configure the environment in `~/.gemini/settings.json`:
+Alternatively, you can explicitly configure the environment in your user settings file:
+
+- Linux / macOS: `~/.gemini/settings.json`
+- Windows: `%USERPROFILE%\.gemini\settings.json`
 
 ```json
 {
@@ -67,3 +82,31 @@ After installing, start a Gemini session in your project directory and run:
 ```
 use the diagnose tool to check coree status
 ```
+
+## Updating
+
+```bash
+gemini extension update coree
+```
+
+Gemini CLI checks the GitHub source for a new version and updates the extension if the version has changed.
+
+If `gemini extension update` is not available in your version, reinstall the extension:
+
+```bash
+gemini extension install github:coree-ai/gemini
+```
+
+## Troubleshooting
+
+**Remote sync env vars are redacted:**
+Gemini CLI redacts environment variables matching `TOKEN`, `AUTH`, or `SECRET` by default. The coree extension allows `COREE__MEMORY__REMOTE_AUTH_TOKEN` through, but if you have a custom variable name, add it to the extension's allowlist or set it via `settings.json` (see above).
+
+**Server starts but times out on first use:**
+First-run downloads the platform binary and embedding model, which can take 30-90 seconds. Wait for the download to complete - subsequent starts are fast.
+
+**MCP server does not appear in the tool list:**
+Restart Gemini CLI. Check that the extension was installed correctly with `gemini extension list`.
+
+**npx hangs or fails:**
+Ensure Node.js 18+ is installed. Check that your network allows npm registry access (`registry.npmjs.org`).

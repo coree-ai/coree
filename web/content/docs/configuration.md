@@ -102,7 +102,13 @@ remote_mode = "replica"  # default: direct
 Prefer the environment variable over the config file:
 
 ```bash
+# Linux / macOS
 export COREE__MEMORY__REMOTE_AUTH_TOKEN=your-token
+```
+
+```powershell
+# Windows (PowerShell)
+$env:COREE__MEMORY__REMOTE_AUTH_TOKEN = "your-token"
 ```
 
 ---
@@ -193,7 +199,11 @@ export COREE__MEMORY__REMOTE_AUTH_TOKEN=your-token
 
 ### Shared backend across all projects
 
-`~/.config/coree/config.toml`:
+Set the remote backend once in your global config so all projects share it:
+
+- Linux: `~/.config/coree/config.toml`
+- macOS: `~/Library/Application Support/coree/config.toml`
+- Windows: `%APPDATA%\coree\config.toml`
 
 ```toml
 [memory]

@@ -1892,27 +1892,17 @@ fn spawn_socket_listener(server: CoreeServer, config: &Config) {
 async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<DbReady> {
     let t_init = std::time::Instant::now();
     mlog!("coree: opening database...");
-    let db = Db::open(config).await?;
+    // Primary holds serve.lock, so it owns the replica files and may recover them
+    // (back up + re-pull) if the local replica is unopenable (can_purge = true).
+    let db = Db::open(config, true).await?;
     let conn = Arc::new(db.conn);
     let handle = db.handle;
     let temp_dir = db.temp_dir;
 
-    // In replica mode, compact any stale WAL from the previous session before
-    // running migrations. A dirty WAL can hide tables that exist in Turso,
-    // causing spurious "no such table" errors on reads that immediately follow
-    // the sync. Checkpointing merges the WAL into the main db file so the
-    // post-sync snapshot is the authoritative starting state.
-    //
-    // GOTCHA: We use sync_db.checkpoint() instead of 'PRAGMA wal_checkpoint' because
-    // Turso's .execute() fails on pragmas that return rows.
-    if let db::AnyDb::Synced(ref sync_db) = handle {
-        let t_cp = std::time::Instant::now();
-        match sync_db.checkpoint().await {
-            Ok(_) => tracing::debug!(elapsed_ms = t_cp.elapsed().as_millis(), "WAL checkpoint"),
-            Err(e) => mlog!("coree: WAL checkpoint failed (non-fatal): {e:#}"),
-        }
-    }
-
+    // The replica's WAL is checkpointed inside Db::open (db::open_replica_with_recovery)
+    // BEFORE the connection is created, so `conn` here already sees the materialized
+    // catalog. Checkpointing after connect() left the connection with a stale schema
+    // cache and caused false "no such table" errors during migrations.
     mlog!("coree: running migrations...");
     let t_mig = std::time::Instant::now();
     let mig_result = migrations::run(&conn).await;
@@ -1920,16 +1910,17 @@ async fn init_db_and_embedder(config: &Config, write_lock: WriteLock) -> Result<
 
     // In replica mode, a stale WAL from a previous session can overlay the main
     // db file after sync, causing "no such table" for tables that exist in Turso.
-    // Purge and re-open once to force a clean full re-sync.
+    // Back up the local replica and re-open once to force a clean full re-sync.
     let (conn, handle, temp_dir) = if let Err(ref e) = mig_result {
         let is_replica = matches!(config.memory.storage.remote_mode, RemoteMode::Replica);
         if is_replica {
             mlog!(
-                "coree: CRITICAL: migration failed in replica mode ({e:#}). PURGING local replica to force clean resync..."
+                "coree: CRITICAL: migration failed in replica mode ({e:#}). Backing up and clearing local replica to force clean resync..."
             );
             drop(conn);
-            db::purge_replica_files(&config.db_path())?;
-            let db = Db::open(config).await?;
+            db::backup_replica_files(&config.db_path())?;
+            // Primary holds serve.lock, so it owns the replica files (can_purge = true).
+            let db = Db::open(config, true).await?;
             let conn = Arc::new(db.conn);
             mlog!("coree: running migrations (retry)...");
             migrations::run(&conn).await?;

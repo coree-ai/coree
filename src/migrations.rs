@@ -24,7 +24,7 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use turso::Connection;
 
-use crate::embed;
+use crate::{embed, mlog};
 
 struct Migration {
     name: &'static str,
@@ -55,15 +55,46 @@ const MIGRATIONS: &[Migration] = &[
 ];
 
 pub async fn run(conn: &Connection) -> Result<()> {
-    // Ensure schema_migrations table exists (idempotent DDL).
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS schema_migrations (
-            name       TEXT PRIMARY KEY,
-            applied_at TEXT NOT NULL,
-            checksum   TEXT NOT NULL
-        );",
-    )
-    .await?;
+    // Ensure schema_migrations exists. GOTCHA: Turso/Limbo can return a false
+    // "already exists" parse error for CREATE TABLE IF NOT EXISTS even when the
+    // table is present (or absent) - see index/schema.rs. Pre-check sqlite_schema
+    // by name and issue a bare CREATE only when truly missing, mirroring that
+    // workaround. Without this, the bootstrap crashes startup on any already-
+    // migrated (e.g. synced replica) database.
+    if object_exists(conn, "schema_migrations").await? {
+        mlog!("coree: schema_migrations table present");
+    } else {
+        mlog!("coree: creating schema_migrations table");
+        conn.execute(
+            "CREATE TABLE schema_migrations (
+                name       TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL,
+                checksum   TEXT NOT NULL
+            )",
+            (),
+        )
+        .await?;
+    }
+
+    // DIAGNOSTIC: on the SAME connection that just saw schema_migrations via
+    // sqlite_schema (object_exists above), probe a direct query against it.
+    // Under turso 0.6.0 this threw a false "no such table: schema_migrations"
+    // even though object_exists returned true (the Limbo catalog lie). Logging
+    // both sides here makes the serve log show definitively whether the engine
+    // bug survives the turso upgrade, without re-reading code.
+    match conn.query("SELECT COUNT(*) FROM schema_migrations", ()).await {
+        Ok(mut rows) => {
+            let n = rows
+                .next()
+                .await
+                .ok()
+                .flatten()
+                .and_then(|r| r.get::<i64>(0).ok())
+                .unwrap_or(-1);
+            mlog!("coree: schema_migrations direct-probe ok (rows={n})");
+        }
+        Err(e) => mlog!("coree: schema_migrations direct-probe FAILED: {e:#}"),
+    }
 
     // Seed schema_migrations from legacy schema_version on first upgrade.
     seed_from_legacy(conn).await?;
@@ -71,9 +102,12 @@ pub async fn run(conn: &Connection) -> Result<()> {
     // Apply pending migrations.
     for migration in MIGRATIONS {
         if is_applied(conn, migration.name).await? {
+            mlog!("coree: migration {} already applied, skipping", migration.name);
             continue;
         }
+        mlog!("coree: applying migration {}", migration.name);
         apply(conn, migration).await?;
+        mlog!("coree: migration {} applied", migration.name);
     }
 
     // Validate checksums of all applied migrations (warn only - DB is already in that state).
@@ -102,7 +136,7 @@ async fn apply(conn: &Connection, migration: &Migration) -> Result<()> {
         "v003_drop_unused" => apply_v003(conn, migration).await?,
         "v005_git_provenance" => apply_v005(conn, migration).await?,
         _ => {
-            conn.execute_batch(migration.sql).await?;
+            execute_migration_sql(conn, migration.sql).await?;
         }
     }
 
@@ -122,6 +156,132 @@ async fn apply(conn: &Connection, migration: &Migration) -> Result<()> {
     .await?;
 
     Ok(())
+}
+
+/// True if an object (table/index/trigger/view) with this name exists.
+/// Used to dodge Limbo's false "already exists" error on CREATE ... IF NOT
+/// EXISTS (see index/schema.rs) by checking existence before issuing DDL.
+async fn object_exists(conn: &Connection, name: &str) -> Result<bool> {
+    let mut rows = conn
+        .query("SELECT count(*) FROM sqlite_schema WHERE name = ?1", (name,))
+        .await?;
+    Ok(rows
+        .next()
+        .await?
+        .and_then(|r| r.get::<i64>(0).ok())
+        .unwrap_or(0)
+        > 0)
+}
+
+/// Run a migration's SQL one statement at a time, applying the Limbo
+/// false-"already exists" workaround: before a `CREATE <kind> [IF NOT EXISTS]
+/// <name>`, skip it when <name> already exists in sqlite_schema. This mirrors
+/// the guard in index/schema.rs and also avoids Limbo's extra unreliability of
+/// IF NOT EXISTS inside a multi-statement execute_batch. Non-CREATE statements
+/// (DROP/ALTER/...) run as-is; statements execute in source order so a
+/// DROP-then-recreate (e.g. v004) re-checks existence after its own DROP.
+async fn execute_migration_sql(conn: &Connection, sql: &str) -> Result<()> {
+    for stmt in split_statements(sql) {
+        if let Some(name) = create_target(&stmt)
+            && object_exists(conn, &name).await?
+        {
+            mlog!("coree:   skip (already exists): {}", stmt_summary(&stmt));
+            continue;
+        }
+        mlog!("coree:   exec: {}", stmt_summary(&stmt));
+        if let Err(e) = conn.execute(stmt.as_str(), ()).await {
+            mlog!("coree:   FAILED: {} -> {e:#}", stmt_summary(&stmt));
+            return Err(e.into());
+        }
+    }
+    Ok(())
+}
+
+/// Split SQL into individual statements, stripping `/* */` block comments and
+/// `--` line comments first. Assumes no `;`, `--`, or `/*` inside string
+/// literals, which holds for every migration in this crate.
+fn split_statements(sql: &str) -> Vec<String> {
+    let no_block = strip_block_comments(sql);
+    let no_comments: String = no_block
+        .lines()
+        .map(|l| match l.find("--") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    no_comments
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Remove non-nested `/* */` block comments.
+fn strip_block_comments(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut rest = sql;
+    while let Some(start) = rest.find("/*") {
+        out.push_str(&rest[..start]);
+        match rest[start + 2..].find("*/") {
+            Some(end) => rest = &rest[start + 2 + end + 2..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// If `stmt` is `CREATE <kind> [IF NOT EXISTS] <name> ...`, return <name>.
+/// Returns None for non-CREATE statements, which run unguarded.
+fn create_target(stmt: &str) -> Option<String> {
+    let mut tokens = stmt.split_whitespace();
+    if !tokens.next()?.eq_ignore_ascii_case("CREATE") {
+        return None;
+    }
+    let mut tok = tokens.next()?;
+    while matches!(
+        tok.to_ascii_uppercase().as_str(),
+        "UNIQUE" | "VIRTUAL" | "TEMP" | "TEMPORARY"
+    ) {
+        tok = tokens.next()?;
+    }
+    if !matches!(
+        tok.to_ascii_uppercase().as_str(),
+        "TABLE" | "INDEX" | "TRIGGER" | "VIEW"
+    ) {
+        return None;
+    }
+    let mut name = tokens.next()?;
+    if name.eq_ignore_ascii_case("IF") {
+        let _not = tokens.next()?;
+        let _exists = tokens.next()?;
+        name = tokens.next()?;
+    }
+    Some(clean_identifier(name))
+}
+
+/// Collapse a statement to a single compact line for log readability.
+fn stmt_summary(stmt: &str) -> String {
+    let one_line = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() > 120 {
+        format!("{}...", one_line.chars().take(120).collect::<String>())
+    } else {
+        one_line
+    }
+}
+
+/// Strip surrounding quoting and any glued-on `(` from an identifier token.
+fn clean_identifier(raw: &str) -> String {
+    raw.split('(')
+        .next()
+        .unwrap_or(raw)
+        .trim_matches(|c| matches!(c, '"' | '`' | '[' | ']' | '\''))
+        .to_string()
 }
 
 /// v002: ADD COLUMN with "duplicate column name" idempotency, then backfill.
@@ -237,10 +397,12 @@ async fn validate_checksum(conn: &Connection, migration: &Migration) -> Result<(
     };
     let current = sha256(migration.sql);
     if stored != current {
-        eprintln!(
+        mlog!(
             "[coree] WARNING: migration '{}' checksum mismatch (stored={}, current={}). \
              The migration file was modified after it was applied.",
-            migration.name, stored, current
+            migration.name,
+            stored,
+            current
         );
     }
     Ok(())
@@ -250,4 +412,62 @@ fn sha256(data: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_target_extracts_names() {
+        assert_eq!(
+            create_target("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER)").as_deref(),
+            Some("schema_version")
+        );
+        assert_eq!(
+            create_target("CREATE UNIQUE INDEX IF NOT EXISTS memories_topic_key ON memories (a)")
+                .as_deref(),
+            Some("memories_topic_key")
+        );
+        assert_eq!(
+            create_target("CREATE INDEX memories_project_status ON memories (project_id)")
+                .as_deref(),
+            Some("memories_project_status")
+        );
+        // Name glued to the column list.
+        assert_eq!(
+            create_target("CREATE TABLE foo(id TEXT)").as_deref(),
+            Some("foo")
+        );
+        // Non-CREATE statements are unguarded.
+        assert_eq!(create_target("DROP INDEX IF EXISTS memories_topic_key"), None);
+        assert_eq!(create_target("ALTER TABLE memories ADD COLUMN git_ref TEXT"), None);
+    }
+
+    #[test]
+    fn split_statements_drops_comments() {
+        // v001 ships a /* */ block comment containing CREATE TRIGGER statements
+        // and semicolons that must never be executed.
+        let sql = "CREATE TABLE a (id TEXT); -- trailing note\n\
+                   /* CREATE TRIGGER t AFTER INSERT ON a BEGIN INSERT INTO a VALUES (1); END; */\n\
+                   CREATE INDEX a_idx ON a (id);";
+        let stmts = split_statements(sql);
+        assert_eq!(stmts.len(), 2);
+        assert!(stmts[0].starts_with("CREATE TABLE a"));
+        assert!(stmts[1].starts_with("CREATE INDEX a_idx"));
+        assert!(stmts.iter().all(|s| !s.contains("TRIGGER")));
+    }
+
+    #[test]
+    fn split_statements_handles_v004_recreate_order() {
+        let sql = include_str!("migrations/v004_active_topic_key.sql");
+        let stmts = split_statements(sql);
+        assert_eq!(stmts.len(), 3);
+        assert!(stmts[0].starts_with("DROP INDEX"));
+        assert_eq!(
+            create_target(&stmts[1]).as_deref(),
+            Some("memories_topic_key")
+        );
+        assert!(stmts[2].starts_with("DROP TABLE"));
+    }
 }
