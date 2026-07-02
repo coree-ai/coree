@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.17.0](https://github.com/coree-ai/coree/compare/v0.16.0...v0.17.0) (2026-07-02)
+
+### Bug Fixes
+
+* use c_char instead of hardcoded i8 in sqlite_vec extension transmute ([053d249](https://github.com/coree-ai/coree/commit/053d2496c1bce9f2f133196c9ba66ab2c0c08180))
+
 ## [0.16.0](https://github.com/coree-ai/coree/compare/v0.15.0...v0.16.0) (2026-06-28)
 
 ### Features

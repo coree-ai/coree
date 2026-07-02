@@ -29,7 +29,7 @@ To configure coree without the extension, add to your Zed settings file:
     "coree": {
       "command": {
         "path": "npx",
-        "args": ["--yes", "@coree-ai/coree@0.16.0", "serve"],
+        "args": ["--yes", "@coree-ai/coree@0.17.0", "serve"],
         "env": {}
       }
     }
@@ -82,7 +82,7 @@ Zed extensions auto-update by default. If you have disabled auto-updates for the
 To update the coree binary version used by a manual config, change the version in the `args` array in your `settings.json`:
 
 ```json
-"args": ["--yes", "@coree-ai/coree@0.16.0", "serve"]
+"args": ["--yes", "@coree-ai/coree@0.17.0", "serve"]
 ```
 
 The npx cache at `~/.npm/_npx/` (`%LocalAppData%\npm-cache\_npx\` on Windows) is reused automatically.

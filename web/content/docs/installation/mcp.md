@@ -20,7 +20,7 @@ The first invocation downloads and caches the package in `~/.npm/_npx/` (Linux/m
   "mcpServers": {
     "coree": {
       "command": "npx",
-      "args": ["--yes", "@coree-ai/coree@0.16.0", "serve"]
+      "args": ["--yes", "@coree-ai/coree@0.17.0", "serve"]
     }
   }
 }
@@ -34,7 +34,7 @@ If your client uses a unified `command` array (e.g. opencode):
 {
   "mcpServers": {
     "coree": {
-      "command": ["npx", "--yes", "@coree-ai/coree@0.16.0", "serve"]
+      "command": ["npx", "--yes", "@coree-ai/coree@0.17.0", "serve"]
     }
   }
 }
@@ -56,7 +56,7 @@ Set a generous startup timeout. First-run downloads the platform binary and the 
   "mcpServers": {
     "coree": {
       "command": "npx",
-      "args": ["--yes", "@coree-ai/coree@0.16.0", "serve"],
+      "args": ["--yes", "@coree-ai/coree@0.17.0", "serve"],
       "timeout": 120000
     }
   }
@@ -129,7 +129,7 @@ Common environment variables:
   "mcpServers": {
     "coree": {
       "command": "npx",
-      "args": ["--yes", "@coree-ai/coree@0.16.0", "serve"],
+      "args": ["--yes", "@coree-ai/coree@0.17.0", "serve"],
       "env": {
         "COREE__MEMORY__MODE": "remote",
         "COREE__MEMORY__REMOTE_URL": "libsql://your-db.turso.io",
@@ -153,7 +153,7 @@ coree determines the project root by walking up from the current working directo
   "mcpServers": {
     "coree": {
       "command": "npx",
-      "args": ["--yes", "@coree-ai/coree@0.16.0", "serve"],
+      "args": ["--yes", "@coree-ai/coree@0.17.0", "serve"],
       "env": {
         "COREE__PROJECT_ROOT": "/path/to/your/project"
       }
@@ -218,15 +218,15 @@ If your agent does not support MCP at all, coree can still be used as a memory b
 
 ```bash
 # Linux / macOS
-npx --yes @coree-ai/coree@0.16.0 search "deployment checklist"
-npx --yes @coree-ai/coree@0.16.0 store --type decision --title "Architecture choice" --content "..."
+npx --yes @coree-ai/coree@0.17.0 search "deployment checklist"
+npx --yes @coree-ai/coree@0.17.0 store --type decision --title "Architecture choice" --content "..."
 
 # Run the server in single-turn mode for scripting
-npx --yes @coree-ai/coree@0.16.0 serve --single-turn '{"method":"tools/call","params":{"name":"search","arguments":{"query":"rate limiting"}}}'
+npx --yes @coree-ai/coree@0.17.0 serve --single-turn '{"method":"tools/call","params":{"name":"search","arguments":{"query":"rate limiting"}}}'
 ```
 
 ```powershell
 # Windows (PowerShell)
-npx --yes @coree-ai/coree@0.16.0 search "deployment checklist"
-npx --yes @coree-ai/coree@0.16.0 store --type decision --title "Architecture choice" --content "..."
+npx --yes @coree-ai/coree@0.17.0 search "deployment checklist"
+npx --yes @coree-ai/coree@0.17.0 store --type decision --title "Architecture choice" --content "..."
 ```
