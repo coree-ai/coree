@@ -12,6 +12,10 @@ rmcp = { version = "1.7.0", features = ["server", "client", "transport-io"] }
 # Database - pure Rust SQLite engine with Turso sync
 turso = { version = "0.7.0-pre.14", features = ["sync"] }
 
+# SQLite via FFI (bundled) + sqlite-vec for the code index backend
+rusqlite = { version = "0.39", features = ["bundled"] }
+sqlite-vec = "=0.1.9"
+
 # Turso 0.7's sync stack pulls rustls without enabling a crypto-provider feature,
 # so rustls cannot auto-select a process-level CryptoProvider and panics on the
 # first TLS handshake. Enable the `ring` provider and install it explicitly in main.
@@ -56,6 +60,9 @@ regex = "1.12.3"
 # Structured tracing and timing instrumentation
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# Async trait for backend abstraction
+async-trait = "0.1"
 
 # Error handling
 anyhow = "1.0.102"

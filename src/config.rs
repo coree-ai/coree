@@ -82,8 +82,18 @@ impl Default for MemoryConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexBackend {
+    #[default]
+    Turso,
+    Sqlite,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct IndexConfig {
+    #[serde(default)]
+    pub backend: IndexBackend,
     #[serde(flatten)]
     pub storage: StorageConfig,
     /// Include git commit history for churn analysis.
@@ -101,6 +111,7 @@ fn default_true() -> bool {
 impl Default for IndexConfig {
     fn default() -> Self {
         Self {
+            backend: IndexBackend::default(),
             storage: StorageConfig::default(),
             git_history: true,
             exclude: vec![],
@@ -342,18 +353,24 @@ impl Config {
         }
     }
 
-    /// Path to the code intelligence index database.
+    /// Path to the code intelligence index database. Filename is per-backend
+    /// (index.db for turso, index-sqlite.db for sqlite) so switching backends
+    /// never converts or reuses files.
     ///
-    /// - Managed: `{data_dir}/coree/managed/{encoded_path}/index.db`
+    /// - Managed: `{data_dir}/coree/managed/{encoded_path}/{filename}`
     /// - Local:   `{local_path}` (relative to project root if not absolute)
     pub fn index_db_path(&self) -> PathBuf {
         let s = &self.index.storage;
+        let filename = match self.index.backend {
+            IndexBackend::Turso => "index.db",
+            IndexBackend::Sqlite => "index-sqlite.db",
+        };
         match s.mode {
             StorageMode::Managed | StorageMode::Disabled | StorageMode::Remote => self
                 .managed_base(s)
                 .join(encode_project_path(self.project_root()))
-                .join("index.db"),
-            StorageMode::Local => self.resolve_local_path(s, ".coree/index.db"),
+                .join(filename),
+            StorageMode::Local => self.resolve_local_path(s, &format!(".coree/{filename}")),
         }
     }
 

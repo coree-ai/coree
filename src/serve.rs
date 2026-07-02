@@ -706,7 +706,7 @@ impl CoreeServer {
                 }
                 if let Some(ref idx) = idx {
                     let code_results =
-                        index::search::search_code(&idx.conn, embedding.clone(), title, 5)
+                        idx.store.search_code(embedding.clone(), title, 5)
                             .await
                             .unwrap_or_default();
                     for r in code_results {
@@ -1057,7 +1057,7 @@ impl CoreeServer {
                 .map_err(|e| tool_err(format!("embed failed: {e}")))?
         };
 
-        let results = index::search::search_code(&idx.conn, embedding, &input.query, limit)
+        let results = idx.store.search_code(embedding, &input.query, limit)
             .await
             .map_err(|e| tool_err(format!("search_code failed: {e}")))?;
 
@@ -1089,7 +1089,7 @@ impl CoreeServer {
             return r;
         }
         let idx = self.try_index_ready()?;
-        let results = index::search::get_symbol(&idx.conn, &input.name, input.file_path.as_deref())
+        let results = idx.store.get_symbol(&input.name, input.file_path.as_deref())
             .await
             .map_err(|e| tool_err(format!("get_symbol failed: {e}")))?;
 
@@ -1160,7 +1160,7 @@ impl CoreeServer {
                 let exclude: std::collections::HashSet<String> =
                     results.iter().map(|r| r.id.clone()).collect();
                 let code_similar: Vec<_> =
-                    index::search::search_code(&idx.conn, embedding, &embed_text, 10)
+                    idx.store.search_code(embedding, &embed_text, 10)
                         .await
                         .unwrap_or_default()
                         .into_iter()
@@ -1215,7 +1215,7 @@ impl CoreeServer {
         }
         let idx = self.try_index_ready()?;
         let limit = input.limit.unwrap_or(5);
-        let coupled = index::search::get_coupled_files(&idx.conn, &input.file_path, limit)
+        let coupled = idx.store.get_coupled_files(&input.file_path, limit)
             .await
             .map_err(|e| tool_err(format!("get_coupled_files failed: {e}")))?;
 
@@ -1280,7 +1280,7 @@ impl CoreeServer {
         let code_results = match self.try_index_ready() {
             Ok(idx) => {
                 index_state_hint = None;
-                let r = index::search::search_code(&idx.conn, embedding, &input.query, limit)
+                let r = idx.store.search_code(embedding, &input.query, limit)
                     .await
                     .unwrap_or_default();
                 tracing::debug!(
@@ -1639,12 +1639,14 @@ async fn serve_inner(config: Config, project_id: String, force_reindex: bool) ->
                 if index_enabled {
                     let db_path = config_for_bg.index_db_path();
                     let project_root = config_for_bg.project_root().to_path_buf();
+                    let backend = config_for_bg.index.backend.clone();
                     let git_history = config_for_bg.index.git_history;
                     let extra_excludes = config_for_bg.index.exclude.clone();
                     tokio::spawn(async move {
                         mlog!("coree: opening code index at {}", db_path.display());
                         match index::open(
                             &db_path,
+                            &backend,
                             project_root.clone(),
                             git_history,
                             Arc::clone(&embedder_for_idx),
@@ -1656,18 +1658,9 @@ async fn serve_inner(config: Config, project_id: String, force_reindex: bool) ->
                                 let _ = idx_tx_clone
                                     .send(index::IndexState::Ready(Arc::clone(&idx_ready)));
                                 mlog!("coree: code index ready, starting background indexing...");
-                                // Indexer and watcher get dedicated connections — must NOT share
-                                // idx_ready.conn (the search connection) due to turso's per-Connection
-                                // ConcurrentGuard which allows only one concurrent operation per instance.
-                                let indexer_conn = match idx_ready.new_conn() {
-                                    Ok(c) => c,
-                                    Err(e) => {
-                                        mlog!("coree: failed to create indexer connection: {e:#}");
-                                        return;
-                                    }
-                                };
+                                let store = Arc::clone(&idx_ready.store);
 
-                                let needs_rebuild = match index::needs_rebuild(&indexer_conn).await {
+                                let needs_rebuild = match index::needs_rebuild(&store).await {
                                     Ok(v) => v,
                                     Err(e) => {
                                         mlog!(
@@ -1685,38 +1678,28 @@ async fn serve_inner(config: Config, project_id: String, force_reindex: bool) ->
                                             "coree: index logic version bump detected, triggering full rebuild"
                                         );
                                     }
-                                    let clear_ok = match index::indexer::clear_all_tables(&indexer_conn).await {
+                                    match store.clear_all().await {
                                         Ok(()) => {
                                             mlog!("coree: index tables cleared for rebuild");
-                                            true
+                                            if let Err(e) = store
+                                                .set_stored_logic_version(index::INDEX_LOGIC_VERSION)
+                                                .await
+                                            {
+                                                mlog!(
+                                                    "coree: failed to store index logic version: {e:#}"
+                                                );
+                                            }
                                         },
                                         Err(e) => {
                                             mlog!("coree: failed to clear index tables: {e:#}");
-                                            false
                                         },
                                     };
-                                    if clear_ok {
-                                        match index::set_stored_logic_version(
-                                            &indexer_conn,
-                                            index::INDEX_LOGIC_VERSION,
-                                        )
-                                        .await
-                                        {
-                                            Ok(()) => mlog!(
-                                                "coree: index logic version set to {}",
-                                                index::INDEX_LOGIC_VERSION
-                                            ),
-                                            Err(e) => mlog!(
-                                                "coree: failed to store index logic version: {e:#}"
-                                            ),
-                                        }
-                                    }
                                 }
 
                                 let emb = Arc::clone(&embedder_for_idx);
                                 match index::indexer::run(
                                     project_root.clone(),
-                                    indexer_conn,
+                                    Arc::clone(&store),
                                     emb.clone(),
                                     git_history,
                                     extra_excludes.clone(),
@@ -1730,18 +1713,11 @@ async fn serve_inner(config: Config, project_id: String, force_reindex: bool) ->
                                     ),
                                     Err(e) => mlog!("coree: code index run failed: {e:#}"),
                                 }
-                                let watcher_conn = match idx_ready.new_conn() {
-                                    Ok(c) => c,
-                                    Err(e) => {
-                                        mlog!("coree: failed to create watcher connection: {e:#}");
-                                        return;
-                                    }
-                                };
                                 let watcher_lock = config_for_bg.index_watcher_lock_path();
                                 index::watcher::start(
                                     watcher_lock,
                                     project_root,
-                                    watcher_conn,
+                                    store,
                                     emb,
                                     git_history,
                                     extra_excludes,

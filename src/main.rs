@@ -152,7 +152,7 @@ async fn main() -> Result<()> {
                 println!("No index database found at {}. Index will be built on next serve start.", db_path.display());
                 return Ok(());
             }
-            index::reset_stored_version(&db_path).await?;
+            index::reset_stored_version(&db_path, &config.index.backend).await?;
             println!("Index version reset at {}. Restart coree serve to trigger a full reindex.", db_path.display());
         }
     }
